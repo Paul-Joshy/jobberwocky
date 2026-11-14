@@ -1,0 +1,6 @@
+/bin/
+*.log
+.env
+config.json
+!internal/config/example.json
+.DS_Store

@@ -1,0 +1,16 @@
+{
+  "workspace": "~/ai-job-search",
+  "claude_args": [
+    "--permission-mode", "acceptEdits",
+    "--allowedTools", "Bash(python3 tools/*),Bash(bun run .agents/skills/*),WebFetch,WebSearch,Agent"
+  ],
+  "quickfit_model": "haiku",
+  "max_parallel_claude": 3,
+  "max_parallel_portals": 4,
+  "notify": true,
+  "searches": [
+    {"portal": "linkedin-search", "args": ["-q", "content strategist", "-l", "Remote", "--jobage", "14", "--limit", "20"]},
+    {"portal": "himalayas-search", "args": ["-q", "copywriter", "--worldwide", "--jobage", "14", "--limit", "20"]},
+    {"portal": "remoteok-search", "args": ["-t", "marketing", "--jobage", "14", "--limit", "20"]}
+  ]
+}
