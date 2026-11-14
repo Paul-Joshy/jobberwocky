@@ -216,3 +216,29 @@ func (m Model) progress(j workspace.Job) string {
 	arrow := styleDim.Render(" → ")
 	return step(d.fit, fit) + arrow + step(d.draft, "Draft") + arrow + step(d.form, "Form") + arrow + step(m.state(j) == states.Done, "Applied")
 }
+
+// verdict is 👍 apply, 🤔 consider or 👎 skip. The fit check's own word wins
+// ("FIT: 71/100 · Good Fit · apply"); otherwise the score band decides
+// (60+ apply, 45-59 consider, below 45 skip). No score yet: blank.
+func (m Model) verdict(j workspace.Job) string {
+	v := strings.ToLower(m.docsFor(j).fitVerdict)
+	switch {
+	case strings.Contains(v, "skip"):
+		return "👎"
+	case strings.Contains(v, "consider"):
+		return "🤔"
+	case strings.Contains(v, "apply"):
+		return "👍"
+	}
+	if s := j.Score(); s != nil {
+		switch {
+		case *s >= 60:
+			return "👍"
+		case *s >= 45:
+			return "🤔"
+		default:
+			return "👎"
+		}
+	}
+	return "  "
+}

@@ -179,8 +179,8 @@ func (m Model) listAndDetail() string {
 	}
 	now := time.Now()
 	compW, locW := 18, 14
-	// fixed cells: mark 1, star 1, score 3, fresh 2, band 1, stages 4, plus 7 spaces
-	titleW := max(10, listW-19-compW-locW-3)
+	// fixed cells: mark 1, star 1, score 3, fresh 2, verdict 2, band 1, stages 4, plus 8 spaces
+	titleW := max(10, listW-22-compW-locW-3)
 	var rows []string
 	if len(m.view) == 0 {
 		empty := map[listTab]string{
@@ -212,8 +212,8 @@ func (m Model) listAndDetail() string {
 			star = styleTop.Render("★")
 			title = styleTop.Render(title)
 		}
-		row := fmt.Sprintf("%s%s%s %s %s %s %s %s %s",
-			sel, star, score, j.Fresh(now), fitGlyph(j.Band()), m.stageStrip(j),
+		row := fmt.Sprintf("%s%s%s %s %s %s %s %s %s %s",
+			sel, star, score, j.Fresh(now), m.verdict(j), fitGlyph(j.Band()), m.stageStrip(j),
 			title, fit(j.Company, compW), fit(j.Location, locW))
 		// rows carry colour codes, so cut them with an ANSI-aware width limit
 		if i == m.cursor {
@@ -362,6 +362,7 @@ const helpText = `  Jobs list
   Stages per row: F fit checked · D drafted · P form prefilled · A applied
   (… = running now). Fit checks are saved and survive restarts.
 
-  Columns: ● marked · ★ top pick · score (green = from your fit check) · freshness (🟢 ≤1 day, 🟡 ≤7, 🔴 older, ⚪ unknown) · quick fit · ✓ fit / ✎ drafted
+  Columns: ● marked · ★ top pick · score (green = from your fit check) · freshness ·
+  verdict 👍 apply / 🤔 consider / 👎 skip (🟢 ≤1 day, 🟡 ≤7, 🔴 older, ⚪ unknown) · quick fit · ✓ fit / ✎ drafted
 
     q         quit (asks again if tasks are running)`

@@ -67,3 +67,27 @@ func TestStagesViewsAndFitScoreSort(t *testing.T) {
 		t.Fatal("fit check not found after restart")
 	}
 }
+
+func TestVerdict(t *testing.T) {
+	m := testModel(t, 140, 30)
+	f := func(v float64) *float64 { return &v }
+	cases := []struct {
+		j    workspace.Job
+		want string
+	}{
+		{workspace.Job{Key: "x1", RankScore: f(75)}, "👍"},
+		{workspace.Job{Key: "x2", RankScore: f(50)}, "🤔"},
+		{workspace.Job{Key: "x3", RankScore: f(30)}, "👎"},
+		{workspace.Job{Key: "x4"}, "  "},
+	}
+	for _, c := range cases {
+		if got := m.verdict(c.j); got != c.want {
+			t.Errorf("%s: got %q want %q", c.j.Key, got, c.want)
+		}
+	}
+	// the fit check's own word beats the score
+	m.docs["x1"] = docInfo{fit: true, fitVerdict: "Good Fit · skip"}
+	if got := m.verdict(workspace.Job{Key: "x1", RankScore: f(75)}); got != "👎" {
+		t.Errorf("fit verdict should win, got %q", got)
+	}
+}
