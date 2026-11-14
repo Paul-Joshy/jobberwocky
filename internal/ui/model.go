@@ -431,6 +431,20 @@ func (m Model) record(t *Task, result string) tea.Cmd {
 		t.Lines = append(t.Lines, "not recorded: "+err.Error())
 		return nil
 	}
+	args, dropped := dropMissingPostingFile(args, m.cfg.Workspace)
+	if dropped {
+		t.Lines = append(t.Lines, "posting file missing: recording without it")
+	}
+	// PDFs go to Job Applications under generic names whatever happens to recording
+	slug := ""
+	if len(args) > 1 {
+		slug = args[1]
+	}
+	if files, err := copyGeneric(m.cfg.Workspace, slug, flagValue(args, "--company"), flagValue(args, "--role")); err != nil {
+		t.Lines = append(t.Lines, "PDFs not copied: "+err.Error())
+	} else {
+		t.Lines = append(t.Lines, "copied to Job Applications: "+strings.Join(files, ", "))
+	}
 	t.Lines = append(t.Lines, "recording (queued behind other drafts)…")
 	run := m.run
 	return func() tea.Msg {

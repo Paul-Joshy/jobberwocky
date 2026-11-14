@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -14,7 +16,8 @@ import (
 // each hand back their record command, and jobberwocky runs them one at a time.
 var recordMu sync.Mutex
 
-var recordBlock = regexp.MustCompile("(?s)## Record command\\s*```[a-z]*\\n(.*?)```")
+// the first fenced block after the heading; drafts sometimes add a note in between
+var recordBlock = regexp.MustCompile("(?s)## Record command.*?```[a-z]*\\n(.*?)```")
 
 // extractRecordCommand finds the command in a draft's "## Record command" block
 // and checks it is exactly a record_application.py call.
@@ -93,4 +96,76 @@ func (r *runner) runRecord(args []string) (string, error) {
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
 	return lastLine(out.String()), err
+}
+
+// dropMissingPostingFile removes --posting-file when the file does not exist:
+// record_application.py would crash on it, and the posting can be archived later.
+func dropMissingPostingFile(args []string, workspace string) ([]string, bool) {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--posting-file" {
+			p := args[i+1]
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(workspace, p)
+			}
+			if _, err := os.Stat(p); err != nil {
+				return append(append([]string{}, args[:i]...), args[i+2:]...), true
+			}
+			return args, false
+		}
+	}
+	return args, false
+}
+
+func flagValue(args []string, name string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == name {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+var cvName = regexp.MustCompile(`\\name\{([^}]*)\}\{([^}]*)\}`)
+
+// copyGeneric copies the compiled CV and cover letter to
+// ~/Documents/Job Applications/<Company> - <Role>/ as <First>_<Last>_CV.pdf and
+// <First>_<Last>_Cover_Letter.pdf, the same names record_application.py uses,
+// so nothing in a file name looks tailored. It never depends on recording.
+func copyGeneric(workspace, slug, company, role string) ([]string, error) {
+	if slug == "" || company == "" || role == "" {
+		return nil, errors.New("missing slug, company or role")
+	}
+	first, last := "Candidate", "CV"
+	if raw, err := os.ReadFile(filepath.Join(workspace, "cv", "main_"+slug+".tex")); err == nil {
+		if m := cvName.FindSubmatch(raw); m != nil {
+			first, last = strings.TrimSpace(string(m[1])), strings.TrimSpace(string(m[2]))
+		}
+	}
+	safe := strings.NewReplacer("/", "-", ":", "-", "\\", "-")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	dest := filepath.Join(home, "Documents", "Job Applications", strings.TrimSpace(safe.Replace(company))+" - "+strings.TrimSpace(safe.Replace(role)))
+	var done []string
+	for _, f := range []struct{ src, name string }{
+		{filepath.Join(workspace, "cv", "main_"+slug+".pdf"), first + "_" + last + "_CV.pdf"},
+		{filepath.Join(workspace, "cover_letters", "cover_"+slug+".pdf"), first + "_" + last + "_Cover_Letter.pdf"},
+	} {
+		raw, err := os.ReadFile(f.src)
+		if err != nil {
+			continue
+		}
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			return done, err
+		}
+		if err := os.WriteFile(filepath.Join(dest, f.name), raw, 0o644); err != nil {
+			return done, err
+		}
+		done = append(done, f.name)
+	}
+	if len(done) == 0 {
+		return nil, fmt.Errorf("no compiled PDFs for %s", slug)
+	}
+	return done, nil
 }
