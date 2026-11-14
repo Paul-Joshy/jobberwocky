@@ -41,7 +41,13 @@ func TestStagesViewsAndFitScoreSort(t *testing.T) {
 	if m.view[0].Key != "b" {
 		t.Fatalf("fit score should lead the sort, got %s first", m.view[0].Key)
 	}
-	if !strings.Contains(m.View(), "✓ Fit check 90 Strong Fit") {
+	if p := ansiSeq.ReplaceAllString(m.progress(m.view[0]), ""); !strings.Contains(p, "🔍 Fit check 90 Strong Fit · apply ✓ → 📝 Draft") {
+		t.Errorf("progress line: %q", p)
+	}
+	if got := m.stageEmoji(m.view[0]); got != emojiFit {
+		t.Errorf("status emoji %q, want %s", got, emojiFit)
+	}
+	if !strings.Contains(m.View(), "🔍") {
 		t.Error("detail should show the fit-check progress")
 	}
 	key := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }

@@ -300,7 +300,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chainQuickFitMsg:
 		t := m.run.newTask("quickfit", fmt.Sprintf("quick fit + store %d new", msg.n), "")
 		m.addTask(t)
-		m.run.startClaude(t, quickFitPrompt(msg.file), m.cfg.QuickFitModel)
+		m.run.startClaude(t, quickFitPrompt(msg.file), m.cfg.QuickFitModel, "low")
 		return m, nil
 
 	case taskStartMsg:
@@ -595,14 +595,14 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			jobs := m.targets()
 			t := m.run.newTask("rank", fmt.Sprintf("rank %d marked", len(jobs)), "")
 			m.addTask(t)
-			m.run.startClaude(t, rankSelectedPrompt(jobs), "")
+			m.run.startClaude(t, rankSelectedPrompt(jobs), m.cfg.RankModel, "")
 			m.clearMarks()
 			m.setStatus("ranking %d jobs in parallel inside one /rank run", len(jobs))
 			break
 		}
 		t := m.run.newTask("rank", "rank new jobs", "")
 		m.addTask(t)
-		m.run.startClaude(t, rankPrompt(), "")
+		m.run.startClaude(t, rankPrompt(), m.cfg.RankModel, "")
 		m.setStatus("ranking new jobs in the background (claude -p /rank)")
 	case "f":
 		jobs := m.targets()
@@ -617,7 +617,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			t := m.run.newTask("fit", "fit · "+j.Company+" · "+j.Title, j.Key)
 			m.addTask(t)
-			m.run.startClaude(t, fitPrompt(j), "")
+			m.run.startClaude(t, fitPrompt(j, m.trackerSt[j.Key]), m.cfg.FitModel, m.cfg.FitEffort)
 			started++
 		}
 		m.clearMarks()
@@ -635,7 +635,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			fit, _ := os.ReadFile(m.docPath("fit", j))
 			t := m.run.newTask("draft", "draft · "+j.Company+" · "+j.Title, j.Key)
 			m.addTask(t)
-			m.run.startClaude(t, draftPrompt(j, string(fit)), "")
+			m.run.startClaude(t, draftPrompt(j, string(fit)), m.cfg.DraftModel, "")
 			started++
 		}
 		m.clearMarks()

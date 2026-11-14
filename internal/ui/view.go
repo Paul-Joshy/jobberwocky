@@ -102,7 +102,7 @@ func (m Model) header() string {
 			tabs = append(tabs, styleDim.Render(" "+label+" "))
 		}
 	}
-	h := styleTitle.Render("jobberwocky") + styleDim.Render(fmt.Sprintf("  %d shown · %d ranked · stages F fit · D draft · P form prefilled · A applied", len(m.view), ranked))
+	h := styleTitle.Render("jobberwocky") + styleDim.Render(fmt.Sprintf("  %d shown · %d ranked · 🆕 new · 🔍 fit checked · 📝 drafted · 📋 form filled · ✅ applied · 📦 archived · ⏳ running", len(m.view), ranked))
 	if len(m.pending) > 0 {
 		h += styleAccent.Render(fmt.Sprintf(" · %d new", len(m.pending)))
 	}
@@ -179,8 +179,8 @@ func (m Model) listAndDetail() string {
 	}
 	now := time.Now()
 	compW, locW := 18, 14
-	// fixed cells: mark 1, star 1, score 3, fresh 2, verdict 2, band 1, stages 4, plus 8 spaces
-	titleW := max(10, listW-22-compW-locW-3)
+	// fixed cells: mark 1, star 1, score 3, fresh 2, verdict 2, band 1, status 2, plus 8 spaces
+	titleW := max(10, listW-20-compW-locW-3)
 	var rows []string
 	if len(m.view) == 0 {
 		empty := map[listTab]string{
@@ -213,7 +213,7 @@ func (m Model) listAndDetail() string {
 			title = styleTop.Render(title)
 		}
 		row := fmt.Sprintf("%s%s%s %s %s %s %s %s %s %s",
-			sel, star, score, j.Fresh(now), m.verdict(j), fitGlyph(j.Band()), m.stageStrip(j),
+			sel, star, score, j.Fresh(now), m.verdict(j), fitGlyph(j.Band()), m.stageEmoji(j),
 			title, fit(j.Company, compW), fit(j.Location, locW))
 		// rows carry colour codes, so cut them with an ANSI-aware width limit
 		if i == m.cursor {
@@ -326,10 +326,10 @@ const helpText = `  Jobs list
     ↑/↓ j/k   move               g/G    top / bottom
     /         filter
   Views (number keys jump, tab / shift+tab cycle)
-    1 active   everything in progress       5 done      applied or finished
-    2 to check no fit check yet             6 archived  not interested
-    3 checked  fit checked, not drafted     7 all       everything
-    4 drafted  drafted, not applied yet
+    1 📌 active    everything in progress     5 ✅ done      applied or finished
+    2 🆕 to check  no fit check yet           6 📦 archived  not interested
+    3 🔍 checked   fit checked, not drafted   7 🌐 all       everything
+    4 📝 drafted   drafted, not applied yet
 
   Mark a job (works on ● marked jobs too; press again to undo)
     c         applied / done                    x   archive (never deletes)
@@ -359,8 +359,8 @@ const helpText = `  Jobs list
   Tasks
     t         task tray: enter for the log, x to cancel
 
-  Stages per row: F fit checked · D drafted · P form prefilled · A applied
-  (… = running now). Fit checks are saved and survive restarts.
+  Status per row: 🆕 not checked · 🔍 fit checked · 📝 drafted · 📋 form prefilled
+  · ✅ applied · 📦 archived · ⏳ running now. Fit checks are saved and survive restarts.
 
   Columns: ● marked · ★ top pick · score (green = from your fit check) · freshness ·
   verdict 👍 apply / 🤔 consider / 👎 skip (🟢 ≤1 day, 🟡 ≤7, 🔴 older, ⚪ unknown) · quick fit · ✓ fit / ✎ drafted

@@ -30,6 +30,10 @@ type Config struct {
 	Claude             string   `json:"claude"`
 	ClaudeArgs         []string `json:"claude_args"`
 	QuickFitModel      string   `json:"quickfit_model"`
+	FitModel           string   `json:"fit_model"`
+	FitEffort          string   `json:"fit_effort"`
+	RankModel          string   `json:"rank_model"`
+	DraftModel         string   `json:"draft_model"`
 	MaxParallelClaude  int      `json:"max_parallel_claude"`
 	MaxParallelPortals int      `json:"max_parallel_portals"`
 	Notify             bool     `json:"notify"`
@@ -117,9 +121,20 @@ func (c *Config) applyDefaults() {
 	if c.Claude == "" {
 		c.Claude = "claude"
 	}
+	// Token budget: mechanical steps on cheap models, writing on the best one.
 	if c.QuickFitModel == "" {
 		c.QuickFitModel = "haiku"
 	}
+	if c.FitModel == "" {
+		c.FitModel = "sonnet" // reading and scoring: no need for the top model
+	}
+	if c.FitEffort == "" {
+		c.FitEffort = "medium"
+	}
+	if c.RankModel == "" {
+		c.RankModel = "sonnet"
+	}
+	// DraftModel stays "" (your default model): the CV and cover letter are where quality pays.
 	if c.MaxParallelClaude <= 0 {
 		c.MaxParallelClaude = 3
 	}

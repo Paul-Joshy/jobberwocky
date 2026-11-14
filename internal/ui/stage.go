@@ -34,7 +34,7 @@ const (
 	tabAll
 )
 
-var tabNames = []string{"active", "to check", "checked", "drafted", "done", "archived", "all"}
+var tabNames = []string{"📌 active", "🆕 to check", "🔍 checked", "📝 drafted", "✅ done", "📦 archived", "🌐 all"}
 
 func (m Model) docsFor(j workspace.Job) docInfo { return m.docs[j.Key] }
 
@@ -154,22 +154,36 @@ func (m Model) tabCounts() []int {
 	return counts
 }
 
-// stageStrip renders F D P A: lit when that stage is done, a dim dot when not.
-func (m Model) stageStrip(j workspace.Job) string {
+// Status emojis, one per stage. Each row shows the furthest stage reached.
+const (
+	emojiNew      = "🆕"
+	emojiFit      = "🔍"
+	emojiDraft    = "📝"
+	emojiForm     = "📋"
+	emojiApplied  = "✅"
+	emojiArchived = "📦"
+	emojiRunning  = "⏳"
+)
+
+// stageEmoji is the row's status: running beats everything, then applied or
+// archived, then the furthest stage on the way (form > draft > fit > new).
+func (m Model) stageEmoji(j workspace.Job) string {
 	d := m.docsFor(j)
-	cell := func(on bool, letter string, busy bool) string {
-		switch {
-		case busy:
-			return styleAccent.Render("…")
-		case on:
-			return styleOK.Render(letter)
-		}
-		return styleDim.Render("·")
+	switch {
+	case m.busy("fit", j.Key) || m.busy("draft", j.Key) || m.busy("fill", j.Key):
+		return emojiRunning
+	case m.state(j) == states.Done:
+		return emojiApplied
+	case m.state(j) == states.Archived:
+		return emojiArchived
+	case d.form:
+		return emojiForm
+	case d.draft:
+		return emojiDraft
+	case d.fit:
+		return emojiFit
 	}
-	return cell(d.fit, "F", m.busy("fit", j.Key)) +
-		cell(d.draft, "D", m.busy("draft", j.Key)) +
-		cell(d.form, "P", m.busy("fill", j.Key)) +
-		cell(m.state(j) == states.Done, "A", false)
+	return emojiNew
 }
 
 // nextStep is what a job needs next on its way to submitted.
@@ -200,11 +214,11 @@ func (m Model) nextStep(j workspace.Job) string {
 // progress is the detail panel's one-line journey for a job.
 func (m Model) progress(j workspace.Job) string {
 	d := m.docsFor(j)
-	step := func(on bool, label string) string {
+	step := func(on bool, emoji, label string) string {
 		if on {
-			return styleOK.Render("✓ " + label)
+			return emoji + " " + styleOK.Render(label+" ✓")
 		}
-		return styleDim.Render("○ " + label)
+		return emoji + " " + styleDim.Render(label)
 	}
 	fit := "Fit check"
 	if d.fitScore != nil {
@@ -214,7 +228,8 @@ func (m Model) progress(j workspace.Job) string {
 		}
 	}
 	arrow := styleDim.Render(" → ")
-	return step(d.fit, fit) + arrow + step(d.draft, "Draft") + arrow + step(d.form, "Form") + arrow + step(m.state(j) == states.Done, "Applied")
+	return step(d.fit, emojiFit, fit) + arrow + step(d.draft, emojiDraft, "Draft") + arrow +
+		step(d.form, emojiForm, "Form") + arrow + step(m.state(j) == states.Done, emojiApplied, "Applied")
 }
 
 // verdict is 👍 apply, 🤔 consider or 👎 skip. The fit check's own word wins

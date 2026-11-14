@@ -130,7 +130,7 @@ func TestDoneAndArchiveTabs(t *testing.T) {
 	if len(m.view) != 1 || m.view[0].Key != "b" {
 		t.Fatalf("archived tab: %+v", m.view)
 	}
-	if !strings.Contains(m.View(), "6 archived 1") {
+	if !strings.Contains(m.View(), "6 📦 archived 1") {
 		t.Error("header should count archived jobs")
 	}
 }

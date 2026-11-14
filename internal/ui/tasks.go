@@ -129,7 +129,7 @@ type nopCloser struct{ io.Writer }
 func (nopCloser) Close() error { return nil }
 
 // startClaude runs a prompt in the background, queued behind the parallel limit.
-func (r *runner) startClaude(t *Task, prompt, model string) {
+func (r *runner) startClaude(t *Task, prompt, model, effort string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
 	go func() {
@@ -144,7 +144,7 @@ func (r *runner) startClaude(t *Task, prompt, model string) {
 		log := openLog(t.LogPath)
 		defer log.Close()
 		fmt.Fprintf(log, "PROMPT\n%s\n\nSTREAM\n", prompt)
-		res := claude.Run(ctx, r.cfg, prompt, model, func(s string) { send(taskLineMsg{id: t.ID, line: s}) }, log)
+		res := claude.Run(ctx, r.cfg, prompt, model, effort, func(s string) { send(taskLineMsg{id: t.ID, line: s}) }, log)
 		send(taskDoneMsg{id: t.ID, result: res.Text, cost: res.CostUSD, err: res.Err})
 	}()
 }

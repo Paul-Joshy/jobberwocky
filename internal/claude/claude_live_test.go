@@ -18,7 +18,7 @@ func TestLiveSmoke(t *testing.T) {
 	}
 	cfg := &config.Config{Claude: "claude", Workspace: t.TempDir()}
 	var steps []string
-	res := Run(context.Background(), cfg, "Reply with exactly: pong", "haiku", func(s string) { steps = append(steps, s) }, io.Discard)
+	res := Run(context.Background(), cfg, "Reply with exactly: pong", "haiku", "", func(s string) { steps = append(steps, s) }, io.Discard)
 	if res.Err != nil {
 		t.Fatal(res.Err)
 	}
