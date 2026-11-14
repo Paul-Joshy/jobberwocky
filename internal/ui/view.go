@@ -57,11 +57,11 @@ func (m Model) View() string {
 	case modeTasks:
 		return m.frame(styleTitle.Render("tasks"), m.tasksView(), styleDim.Render("↑↓ move · enter log · x cancel · esc back"))
 	}
-	body := m.listAndDetail()
-	if m.mode == modeInput {
-		body = lipgloss.JoinVertical(lipgloss.Left, body, m.input.View())
+	foot := m.footer()
+	if m.mode == modeInput { // the prompt takes the status line, so it is never pushed off screen
+		foot = strings.SplitN(foot, "\n", 2)[0] + "\n" + m.input.View()
 	}
-	return m.frame(m.header(), body, m.footer())
+	return m.frame(m.header(), m.listAndDetail(), foot)
 }
 
 func (m Model) frame(head, body, foot string) string {

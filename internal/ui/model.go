@@ -661,7 +661,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			openURL(j.URL)
 			m.setStatus("opened %s", j.URL)
 		}
-	case "enter", "v":
+	case "enter", "ctrl+j", "ctrl+m", "v":
 		if j, ok := m.selected(); ok {
 			m.openJobDoc(j)
 		}
@@ -692,7 +692,7 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.filter.SetValue("")
 		fallthrough
-	case "enter":
+	case "enter", "ctrl+j", "ctrl+m":
 		m.filtering = false
 		m.filter.Blur()
 		m.rebuild()
@@ -722,12 +722,22 @@ func (m *Model) askNextForm() {
 	m.inputJob = j
 	n := m.fillTotal - len(m.fillQueue)
 	m.input.Prompt = fmt.Sprintf("form for %s (%d/%d) › ", j.Company, n, m.fillTotal)
-	m.input.SetValue(j.URL)
-	m.input.CursorEnd()
-	m.input.Placeholder = "form link · enter fill · tab skip this job · esc stop"
+	m.input.SetValue("")
+	if looksLikeForm(j.URL) {
+		m.input.SetValue(j.URL)
+		m.input.CursorEnd()
+	}
+	m.input.Placeholder = "paste the APPLICATION FORM link (the page with the fields, not the job ad) · enter fill · tab skip · esc stop"
 	m.input.Focus()
 	m.prevMode, m.mode = modeList, modeInput
 }
+
+// formHosts are application-form sites: a posting URL on one of these is
+// usually the form itself, so it is safe to prefill. Job boards (LinkedIn,
+// Himalayas, ...) only link onward to the real form.
+var formHosts = regexp.MustCompile(`(?i)^https://([a-z0-9-]+\.)*(forms\.gle|docs\.google\.com/forms|greenhouse\.io|lever\.co|ashbyhq\.com|workable\.com|smartrecruiters\.com|myworkdayjobs\.com|recruitee\.com|bamboohr\.com|jobvite\.com|teamtailor\.com|keka\.com|zohorecruit\.)`)
+
+func looksLikeForm(url string) bool { return formHosts.MatchString(url) }
 
 // freeSlot is the lowest Chrome profile slot no running fill is using, so
 // parallel fills never fight over one profile's lock.
@@ -755,7 +765,7 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.askNextForm()
 		return m, nil
-	case "enter":
+	case "enter", "ctrl+j", "ctrl+m":
 		url := strings.TrimSpace(m.input.Value())
 		if !formURL.MatchString(url) {
 			m.setStatus("that is not an https link (tab skips this job)")
@@ -780,7 +790,7 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateDoc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "q", "v", "enter":
+	case "esc", "q", "v", "enter", "ctrl+j", "ctrl+m":
 		m.mode = m.prevMode
 		return m, nil
 	}
@@ -805,7 +815,7 @@ func (m Model) updateTasks(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.setStatus("cancelling %s", t.Label)
 			}
 		}
-	case "enter":
+	case "enter", "ctrl+j", "ctrl+m":
 		if m.taskCursor < len(m.tasks) {
 			t := m.tasks[m.taskCursor]
 			var b strings.Builder

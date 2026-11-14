@@ -238,3 +238,31 @@ func TestTrackerAppliedJobsAreDoneAndNeverPicks(t *testing.T) {
 		t.Errorf("done count %d", m.countState(states.Done))
 	}
 }
+
+func TestFillPromptEnterVariantsAndPrefill(t *testing.T) {
+	for _, enter := range []tea.KeyMsg{{Type: tea.KeyEnter}, {Type: tea.KeyCtrlJ}} {
+		m := testModel(t, 140, 30)
+		m.all[0].URL = "https://job-boards.greenhouse.io/acme/jobs/123"
+		m.rebuild()
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+		m = next.(Model)
+		if m.input.Value() != m.all[0].URL {
+			t.Fatalf("a Greenhouse link should be prefilled, got %q", m.input.Value())
+		}
+		if !strings.Contains(m.View(), "form for") {
+			t.Fatal("the prompt must be visible even with a full list")
+		}
+		next, _ = m.Update(enter)
+		m = next.(Model)
+		if len(m.tasks) != 1 || m.mode != modeList {
+			t.Fatalf("%v: enter did not start the fill (tasks %d, mode %v)", enter, len(m.tasks), m.mode)
+		}
+	}
+	m := testModel(t, 140, 30)
+	m.all[0].URL = "https://himalayas.app/companies/x/jobs/y"
+	m.rebuild()
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if v := next.(Model).input.Value(); v != "" {
+		t.Fatalf("a job-board link must not be prefilled, got %q", v)
+	}
+}
