@@ -95,6 +95,7 @@ func draftPrompt(j workspace.Job, fit string) string {
 Rules for this run:
 - Run Steps 2 to 6 of /apply for this one job. Skip Step 1's question round; the fit check above is approved.
 - Where a [PAUL] answer is needed, leave it out of the documents and list it under "## Questions" at the end.
+- Step 3 (the application-reviewer subagent) is mandatory for every draft: never skip it to save time. Apply its edits that survive the Grounding Audit, then add a section headed exactly "## Review" with the reviewer's verdict, the edits you applied, and the ones you rejected and why. If you write no documents (for example, a draft already exists), say so instead of this section.
 - Compile with python3 tools/build_docs.py and verify with python3 tools/check_docs.py until there are no FAILs.
 - Do NOT run tools/record_application.py and do not edit job_search_tracker.csv or STATUS.md: other drafts run in parallel, and jobberwocky records each one in turn. Instead end your answer with a section headed exactly "## Record command" holding one fenced code block with the single command you would have run, starting `+"`python3 tools/record_application.py <slug>`"+` and including --company, --role, --fit, --status drafted, --source and --posting-file.
 - Before that, list: file paths, the check summary, every stretch claim, the questions, and the apply link.`,

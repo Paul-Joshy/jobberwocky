@@ -3,6 +3,8 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"github.com/Paul-Joshy/jobberwocky/internal/run"
 	"os"
@@ -48,7 +50,8 @@ type Model struct {
 	states  *states.Store
 	top     map[string]int // job key -> top-pick rank 1..3
 
-	trackerSt map[string]string  // job key -> status in job_search_tracker.csv
+	trackerSt map[string]string // job key -> status in job_search_tracker.csv
+	trackerRw map[string]workspace.TrackerRow
 	docs      map[string]docInfo // job key -> which stage files exist
 	marked    map[string]bool    // jobs selected with space; f, d, r and p act on all of them
 
@@ -74,6 +77,7 @@ type Model struct {
 	spin      spinner.Model
 	status    string
 	quitArmed bool
+	bigArmed  string // "f" or "d" after a first press on more than bigBatch marked jobs
 	w, h      int
 }
 
@@ -293,9 +297,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.all = msg.jobs
 		m.trackerSt = map[string]string{}
+		m.trackerRw = map[string]workspace.TrackerRow{}
 		for _, j := range m.all {
-			if st, ok := workspace.TrackerStatus(j, msg.tracker); ok {
-				m.trackerSt[j.Key] = st
+			if r, ok := workspace.TrackerMatch(j, msg.tracker); ok {
+				m.trackerSt[j.Key] = r.Status
+				m.trackerRw[j.Key] = r
 			}
 		}
 		m.refreshDocs()
@@ -343,6 +349,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case taskLineMsg:
 		if t := m.byID[msg.id]; t != nil {
+			if t.Kind == "fill" && strings.HasPrefix(msg.line, "READY_FOR_REVIEW") {
+				m.run.notify("Form ready to check", strings.TrimPrefix(t.Label, "fill form · ")+": review it and press Submit yourself")
+			}
 			t.Lines = append(t.Lines, msg.line)
 			if len(t.Lines) > 400 {
 				t.Lines = t.Lines[len(t.Lines)-400:]
@@ -352,6 +361,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case taskDoneMsg:
 		return m.finish(msg)
+
+	case appliedMsg:
+		m.setStatus("%s", msg.summary)
+		if strings.HasPrefix(msg.summary, "✗") {
+			m.run.notify("Tracker not updated", "Open jobberwocky for details")
+		}
+		return m, m.reload()
 
 	case recordDoneMsg:
 		if t := m.byID[msg.id]; t != nil {
@@ -402,6 +418,9 @@ func (m Model) finish(msg taskDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		t.State = failed
 		m.setStatus("✗ %s failed: %v (t for the log)", t.Label, msg.err)
+		if !errors.Is(msg.err, context.Canceled) {
+			m.run.notify("Task failed", t.Label)
+		}
 		return m, nil
 	}
 	t.State = done
@@ -439,6 +458,11 @@ func (m Model) finish(msg taskDoneMsg) (tea.Model, tea.Cmd) {
 		if j, ok := m.jobByKey(t.JobKey); ok {
 			_ = os.WriteFile(m.docPath("drafts", j), []byte(msg.result), 0o600)
 			m.setStatus("✓ draft ready: %s (v to read, p to fill the form)", j.Company)
+			if !reviewed(msg.result) {
+				t.Lines = append(t.Lines, "⚠ no \"## Review\" section: the reviewer step may have been skipped")
+				m.setStatus("⚠ draft for %s has no review section: read it (v) before using it", j.Company)
+				m.run.notify("Draft needs a look", j.Company+": no review section")
+			}
 			m.run.notify("Draft ready", j.Company+": "+j.Title)
 			cmd = m.record(t, msg.result)
 		}
@@ -529,9 +553,25 @@ func (m Model) quit() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
+// bigBatch is how many fit checks or drafts start without a second press.
+const bigBatch = 3
+
 func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() != "q" {
 		m.quitArmed = false
+	}
+	armed := m.bigArmed
+	m.bigArmed = ""
+	if k := msg.String(); (k == "f" || k == "d") && armed != k {
+		if n := len(m.targets()); n > bigBatch {
+			m.bigArmed = k
+			what, each := "fit checks", "~$0.30"
+			if k == "d" {
+				what, each = "drafts", "~$1-3"
+			}
+			m.setStatus("%d %s marked (%s each). Press %s again to run them all, or esc and mark fewer.", n, what, each, k)
+			return m, nil
+		}
 	}
 	page := max(1, m.bodyHeight()-1)
 	switch msg.String() {
@@ -591,8 +631,14 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rebuild()
 		if set {
 			m.setStatus("%s marked %s (press %s again in the %s tab to undo)", names(jobs), verb, msg.String(), verb)
+			if state == states.Done {
+				return m, m.recordApplied(jobs)
+			}
 		} else {
 			m.setStatus("%s no longer %s", names(jobs), verb)
+			if state == states.Done {
+				m.setStatus("%s no longer done here; the tracker keeps 'applied' (it never moves back): edit job_search_tracker.csv if that was a mistake", names(jobs))
+			}
 		}
 	case "R":
 		m.setStatus("reloaded")

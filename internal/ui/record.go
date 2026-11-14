@@ -10,6 +10,11 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/Paul-Joshy/jobberwocky/internal/workspace"
 )
 
 // recordMu serialises every write to the tracker and STATUS: parallel drafts
@@ -169,3 +174,79 @@ func copyGeneric(workspace, slug, company, role string) ([]string, error) {
 	}
 	return done, nil
 }
+
+// pastApplied are tracker statuses that `c` must leave alone.
+var pastApplied = map[string]bool{"applied": true, "interview": true, "offer": true, "rejected": true, "withdrawn": true, "closed": true, "ghosted": true}
+
+type appliedMsg struct{ summary string }
+
+// appliedArgs is the record_application.py call that marks a job applied. It
+// reuses the tracker row's exact company and role when one matches, so the
+// row is updated rather than duplicated. ok is false when there is nothing to do.
+func appliedArgs(j workspace.Job, row workspace.TrackerRow, hasRow bool, today string) ([]string, bool) {
+	company, role := j.Company, j.Title
+	if hasRow {
+		if pastApplied[strings.ToLower(strings.TrimSpace(row.Status))] {
+			return nil, false
+		}
+		company, role = row.Company, row.Role
+	}
+	company, role = strings.TrimSpace(company), strings.TrimSpace(role)
+	slug := slugify(company, role)
+	if company == "" || role == "" || slug == "" {
+		return nil, false
+	}
+	args := []string{"tools/record_application.py", slug, "--company", company, "--role", role,
+		"--status", "applied", "--no-copy-pdfs", "--note", "applied " + today + " (marked done in jobberwocky)",
+		"--status-line", "Applied: " + company + " - " + role + " (marked done in jobberwocky)"}
+	if !hasRow && j.URL != "" {
+		args = append(args, "--source", j.URL)
+	}
+	return args, true
+}
+
+var slugJunk = regexp.MustCompile(`[^a-z0-9_]`)
+var slugRuns = regexp.MustCompile(`_+`)
+
+// slugify matches record_application.py's slugify (documents/README.md rule).
+func slugify(company, role string) string {
+	s := strings.ReplaceAll(strings.ToLower(company+"_"+role), " ", "_")
+	s = slugJunk.ReplaceAllString(s, "")
+	return strings.Trim(slugRuns.ReplaceAllString(s, "_"), "_")
+}
+
+// recordApplied writes "applied" to the tracker (and a STATUS log line) for
+// each job just marked done, one at a time under the record lock.
+func (m Model) recordApplied(jobs []workspace.Job) tea.Cmd {
+	today := time.Now().Format("2006-01-02")
+	var calls [][]string
+	var names []string
+	for _, j := range jobs {
+		row, has := m.trackerRw[j.Key]
+		if args, ok := appliedArgs(j, row, has, today); ok {
+			calls = append(calls, args)
+			names = append(names, j.Company)
+		}
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	r := m.run
+	return func() tea.Msg {
+		var bad []string
+		for i, args := range calls {
+			if line, err := r.runRecord(args); err != nil {
+				bad = append(bad, names[i]+": "+line)
+			}
+		}
+		if len(bad) > 0 {
+			return appliedMsg{summary: "✗ tracker not updated for " + strings.Join(bad, "; ")}
+		}
+		return appliedMsg{summary: fmt.Sprintf("✅ done and recorded as applied in the tracker + STATUS: %s", strings.Join(names, ", "))}
+	}
+}
+
+// reviewed reports whether a draft result carries the mandatory review section.
+func reviewed(result string) bool { return reviewHeading.MatchString(result) }
+
+var reviewHeading = regexp.MustCompile(`(?m)^##\s+Review\b`)

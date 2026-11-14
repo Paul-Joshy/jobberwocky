@@ -81,14 +81,20 @@ func sameRole(a, b string) bool {
 
 // TrackerStatus is the tracker status of the application matching this job, if any.
 func TrackerStatus(j Job, rows []TrackerRow) (string, bool) {
+	r, ok := TrackerMatch(j, rows)
+	return r.Status, ok
+}
+
+// TrackerMatch is the tracker row of the application matching this job, if any.
+func TrackerMatch(j Job, rows []TrackerRow) (TrackerRow, bool) {
 	company := strings.Join(normWords(j.Company), " ")
 	if company == "" {
-		return "", false
+		return TrackerRow{}, false
 	}
 	for _, r := range rows {
 		if strings.Join(normWords(r.Company), " ") == company && sameRole(j.Title, r.Role) {
-			return r.Status, true
+			return r, true
 		}
 	}
-	return "", false
+	return TrackerRow{}, false
 }

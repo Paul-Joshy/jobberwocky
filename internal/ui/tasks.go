@@ -327,10 +327,12 @@ func (r *runner) startExec(t *Task, slot int, name string, args ...string) {
 
 // notify pings the phone through the workspace's tools/notify.py, if set up.
 // The script screens out contact details and salaries itself.
+// Every ping also shows as a macOS notification, which needs no setup.
 func (r *runner) notify(title, msg string) {
 	if !r.cfg.Notify {
 		return
 	}
+	go desktopNotify(title, msg)
 	script := filepath.Join(r.cfg.Workspace, "tools", "notify.py")
 	if _, err := os.Stat(script); err != nil {
 		return
@@ -340,4 +342,16 @@ func (r *runner) notify(title, msg string) {
 		cmd.Dir = r.cfg.Workspace
 		_ = cmd.Run()
 	}()
+}
+
+// desktopNotify shows a macOS notification. The text goes in as arguments,
+// never spliced into the script, so nothing in it can be run.
+func desktopNotify(title, msg string) {
+	if _, err := exec.LookPath("osascript"); err != nil {
+		return
+	}
+	_ = exec.Command("osascript",
+		"-e", "on run argv",
+		"-e", `display notification (item 2 of argv) with title "jobberwocky" subtitle (item 1 of argv) sound name "Glass"`,
+		"-e", "end run", title, msg).Run()
 }

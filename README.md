@@ -29,7 +29,7 @@ jobberwocky is a front end for an [ai-job-search](https://github.com/ai-job-sear
 | `p` | **Fill** each job's application form | Asks for each form link in turn (prefilled with the posting URL; `tab` skips a job). Each runs `tools/fill_form.py` in its own Chrome window and profile, and works on Google Forms and ordinary careers-portal forms. **It never submits.** You check every answer and press Submit yourself. |
 | `o` | Open the posting in your browser | |
 | `t` | Task tray: logs, cost per task, `x` to cancel | |
-| `c` / `x` | **Done** (applied or finished) / **archive** (not interested). Works on marked jobs too, and pressing the key again undoes it. | Saved in `~/.local/share/jobberwocky/states.json`. Your workspace job list is never changed. |
+| `c` / `x` | **Done** (applied) / **archive** (not interested). Works on marked jobs too, and pressing the key again undoes it in jobberwocky. | Saved in `~/.local/share/jobberwocky/states.json`. `c` also records the job as **applied** in `job_search_tracker.csv` (updating its drafted row, or adding one) and logs a line in `STATUS.md`, through `tools/record_application.py`. The tracker never moves backwards, so undoing `c` leaves it at applied. A row already past applied (interview, offer, rejected) is left alone. `x` never touches the tracker. |
 | `1`–`7` / `tab` | Views: **1 active · 2 to check · 3 checked · 4 drafted · 5 done · 6 archived · 7 all**, with counts | |
 | `*` | Mark the ★ top 3 picks | |
 | `/` `R` `?` | filter · reload · help | |
@@ -47,6 +47,19 @@ With [tmux](https://github.com/tmux/tmux) installed (`brew install tmux`), every
 - Each run's prompt, output and exit code are in `~/.local/share/jobberwocky/runs/<run>/`.
 
 Without tmux, tasks run inside jobberwocky and stop when it quits. A fit check's score beats the `/rank` score for sorting.
+
+## Keeping token use down
+
+Every AI step is a fresh `claude -p` run that starts cold and reads the workspace's skill files, so the number of runs matters more than anything else. What helps, roughly in order:
+
+1. **Fit-check on a mid-size model.** `fit_model` defaults to a Sonnet-class model with `fit_effort: "medium"`. In practice that cut a fit check to about a quarter of the cost of running it on the largest model, with the same verdicts. Keep `draft_model` empty (your default model): the CV and cover letter are where quality pays.
+2. **Check only what you would apply to.** `*` then `f` checks the ★ top 3. Skip 🔴 old postings and L-band jobs; they rarely pay off.
+3. **Draft only after a 👍 verdict.** A draft costs several fit checks. Read a 🤔 fit check (`v`) before drafting.
+4. **Never draft the same job twice.** 📝 means it is already drafted. A second draft re-reads everything and usually just revises the first.
+5. **Rank once per scrape.** `r` with nothing marked ranks only the new jobs. Ranking all jobs again re-scores ones you have already seen.
+6. **Leave the quick-fit on a small model.** `quickfit_model: "haiku"` triages new hits for a fraction of a cent each.
+7. **Parallelism is free.** `max_parallel_claude` changes how fast a batch finishes, not what it costs. The batch size is what costs, which is why `f` or `d` on more than 3 marked jobs asks for a second press.
+8. **Watch the numbers.** The task tray (`t`) shows the cost Claude Code reports for each run. On a subscription this counts against your usage limits rather than a bill.
 
 ## Install
 
@@ -83,7 +96,8 @@ jobberwocky
 
 - **searches**: one entry per portal call. `portal` is a skill folder under `.agents/skills/`, and `args` are that portal's own CLI flags (see its `SKILL.md`). `--format json` is added for you. A portal with `enabled: false` in its `SKILL.md` is skipped.
 - **claude_args**: passed to every `claude -p` call. Headless runs can't answer permission prompts, so a tool that isn't allowed is simply refused. Keep this list as narrow as you can.
-- **notify**: when the workspace has `tools/notify.py` set up (ntfy), finished tasks ping your phone. That script refuses any message containing an email address, phone number or salary.
+- **notify**: pings when a job's status changes: fit check ready, draft ready (or missing its review), form filled and ready to check, scrape or ranking done, a task failed, or the tracker couldn't be updated. Each ping shows as a macOS notification (no setup), and also on your phone when the workspace has `tools/notify.py` set up (ntfy; run `python3 tools/notify.py --init` once and subscribe to the topic it prints). That script refuses any message containing an email address, phone number or salary.
+- Marking more than 3 jobs for `f` or `d` asks for a second press, with a rough cost per run, so a big batch never starts by accident.
 - Optional: `bun`, `python`, `form_python`, `claude` paths. jobberwocky finds sensible defaults, and prefers Homebrew Python over macOS's built-in 3.9.
 
 ## Privacy and safety
