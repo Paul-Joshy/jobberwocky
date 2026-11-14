@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Paul-Joshy/jobberwocky/internal/config"
+	"github.com/Paul-Joshy/jobberwocky/internal/states"
 	"github.com/Paul-Joshy/jobberwocky/internal/workspace"
 )
 
@@ -41,7 +42,8 @@ type Model struct {
 	view    []workspace.Job
 	cursor  int
 	offset  int
-	showAll bool
+	tab     listTab
+	states  *states.Store
 	marked  map[string]bool // jobs selected with space; f, d, r and p act on all of them
 
 	fillQueue []workspace.Job // marked jobs still waiting for their form URL
@@ -88,7 +90,7 @@ func New(cfg *config.Config) (Model, error) {
 	m := Model{
 		cfg: cfg, run: newRunner(cfg), filter: f, input: in, spin: sp,
 		byID: map[int]*Task{}, doc: viewport.New(80, 20),
-		marked: map[string]bool{}, fillSlot: map[int]int{},
+		marked: map[string]bool{}, fillSlot: map[int]int{}, states: states.Load(cfg.DataDir),
 		status: "s scrape · r rank · f fit check · d draft · p fill form · ? help",
 	}
 	return m, nil
@@ -104,12 +106,39 @@ func (m Model) reload() tea.Cmd {
 	}
 }
 
+// listTab is which slice of jobs the list shows; tab cycles through them.
+type listTab int
+
+const (
+	tabActive listTab = iota
+	tabDone
+	tabArchived
+	tabAll
+)
+
+var tabNames = []string{"active", "done", "archived", "all"}
+
+// inTab: active hides done, archived and the workspace's skipped/expired
+// statuses; done and archived show only jobberwocky's own states; all shows everything.
+func (m Model) inTab(j workspace.Job) bool {
+	st := m.states.Get(j.Key)
+	switch m.tab {
+	case tabActive:
+		return st == "" && !j.Hidden()
+	case tabDone:
+		return st == states.Done
+	case tabArchived:
+		return st == states.Archived
+	}
+	return true
+}
+
 func (m *Model) rebuild() {
 	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
 	m.view = m.view[:0]
 	for _, src := range [][]workspace.Job{m.pending, m.all} {
 		for _, j := range src {
-			if !m.showAll && j.Hidden() {
+			if !m.inTab(j) {
 				continue
 			}
 			if q != "" && !strings.Contains(strings.ToLower(j.Title+" "+j.Company+" "+j.Location+" "+j.Portal), q) {
@@ -409,10 +438,41 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 		m.filter.Focus()
 		return m, textinput.Blink
-	case "a":
-		m.showAll = !m.showAll
+	case "tab", "shift+tab":
+		step := 1
+		if msg.String() == "shift+tab" {
+			step = len(tabNames) - 1
+		}
+		m.tab = listTab((int(m.tab) + step) % len(tabNames))
+		m.cursor = 0
+		m.clearMarks()
 		m.rebuild()
-		m.setStatus("showing %s jobs", map[bool]string{true: "all", false: "active"}[m.showAll])
+		m.setStatus("%s jobs", tabNames[m.tab])
+	case "c", "x":
+		state, verb := states.Done, "done"
+		if msg.String() == "x" {
+			state, verb = states.Archived, "archived"
+		}
+		jobs := m.targets()
+		if len(jobs) == 0 {
+			break
+		}
+		keys := make([]string, len(jobs))
+		for i, j := range jobs {
+			keys[i] = j.Key
+		}
+		set, err := m.states.Toggle(keys, state)
+		if err != nil {
+			m.setStatus("could not save: %v", err)
+			break
+		}
+		m.clearMarks()
+		m.rebuild()
+		if set {
+			m.setStatus("%s marked %s (press %s again in the %s tab to undo)", names(jobs), verb, msg.String(), verb)
+		} else {
+			m.setStatus("%s no longer %s", names(jobs), verb)
+		}
 	case "R":
 		m.setStatus("reloaded")
 		return m, m.reload()

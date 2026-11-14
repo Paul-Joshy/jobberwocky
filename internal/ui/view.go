@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/Paul-Joshy/jobberwocky/internal/states"
 	"github.com/Paul-Joshy/jobberwocky/internal/workspace"
 )
 
@@ -80,16 +81,26 @@ func (m Model) frame(head, body, foot string) string {
 }
 
 func (m Model) header() string {
-	ranked, active := 0, 0
+	ranked := 0
 	for _, j := range m.all {
 		if j.RankScore != nil {
 			ranked++
 		}
-		if !j.Hidden() {
-			active++
+	}
+	tabs := ""
+	counts := []string{"", fmt.Sprint(m.states.Count(states.Done)), fmt.Sprint(m.states.Count(states.Archived)), ""}
+	for i, name := range tabNames {
+		label := name
+		if counts[i] != "" && counts[i] != "0" {
+			label += " " + counts[i]
+		}
+		if listTab(i) == m.tab {
+			tabs += styleSel.Render(" "+label+" ") + " "
+		} else {
+			tabs += styleDim.Render(" "+label+" ") + " "
 		}
 	}
-	h := styleTitle.Render("jobberwocky") + styleDim.Render(fmt.Sprintf("  %d shown · %d active · %d ranked", len(m.view), active, ranked))
+	h := styleTitle.Render("jobberwocky") + "  " + tabs + styleDim.Render(fmt.Sprintf("%d shown · %d ranked", len(m.view), ranked))
 	if len(m.pending) > 0 {
 		h += styleAccent.Render(fmt.Sprintf(" · %d new", len(m.pending)))
 	}
@@ -166,7 +177,13 @@ func (m Model) listAndDetail() string {
 	titleW := max(10, listW-2-4-3-2-compW-locW-4)
 	var rows []string
 	if len(m.view) == 0 {
-		rows = append(rows, styleDim.Render("No jobs to show. Press s to scrape, a to show hidden ones."))
+		empty := map[listTab]string{
+			tabActive:   "No active jobs. Press s to scrape, tab for done and archived.",
+			tabDone:     "Nothing marked done yet. c marks a job done.",
+			tabArchived: "Nothing archived. x archives a job.",
+			tabAll:      "No jobs yet. Press s to scrape.",
+		}
+		rows = append(rows, styleDim.Render(empty[m.tab]))
 	}
 	for i := off; i < len(m.view) && i < off+bh; i++ {
 		j := m.view[i]
@@ -229,6 +246,12 @@ func (m Model) detailText(j workspace.Job, w int) string {
 	}
 	if j.Fit != "" {
 		fmt.Fprintf(&b, "quick fit %s · status %s\n", j.Fit, j.Status)
+	}
+	switch m.states.Get(j.Key) {
+	case states.Done:
+		b.WriteString(styleOK.Render("✔ done") + styleDim.Render(" (c to undo)") + "\n")
+	case states.Archived:
+		b.WriteString(styleDim.Render("▣ archived (x to restore)") + "\n")
 	}
 	if j.Deadline != "" {
 		fmt.Fprintf(&b, "deadline %s\n", j.Deadline)
@@ -296,7 +319,10 @@ func (m Model) tasksView() string {
 
 const helpText = `  Jobs list
     ↑/↓ j/k   move               g/G    top / bottom
-    /         filter             a      show hidden (skipped, expired)
+    /         filter
+    tab       switch list: active · done · archived · all (shift+tab back)
+    c         mark done (applied / finished)    press again to undo
+    x         archive (not interested)          press again to restore
     enter, v  read fit check / draft for the job
     o         open the posting in your browser
     R         reload from seen_jobs.json

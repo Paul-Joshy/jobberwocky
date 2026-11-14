@@ -53,10 +53,12 @@ func TestViewRendersAndHidesSkipped(t *testing.T) {
 
 func TestShowAllAndFilter(t *testing.T) {
 	m := testModel(t, 120, 30)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	m = next.(Model)
-	if len(m.view) != 3 {
-		t.Fatalf("show all: got %d jobs", len(m.view))
+	for i := 0; i < 3; i++ { // active → done → archived → all
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = next.(Model)
+	}
+	if m.tab != tabAll || len(m.view) != 3 {
+		t.Fatalf("all tab: got tab %d with %d jobs", m.tab, len(m.view))
 	}
 	m.filter.SetValue("beta")
 	m.rebuild()
@@ -87,6 +89,41 @@ func TestMarkAndBatchDraftSkipsUnchecked(t *testing.T) {
 	m = next.(Model)
 	if len(m.tasks) != 0 || len(m.marked) != 0 {
 		t.Fatalf("drafts started without fit checks: %d tasks", len(m.tasks))
+	}
+}
+
+func TestDoneAndArchiveTabs(t *testing.T) {
+	m := testModel(t, 120, 30)
+	key := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+	// cursor is on the top job ("a", ranked 81): mark it done
+	next, _ := m.Update(key("c"))
+	m = next.(Model)
+	if len(m.view) != 1 || m.view[0].Key != "b" {
+		t.Fatalf("done job should leave the active tab, got %+v", m.view)
+	}
+	// archive the remaining one
+	next, _ = m.Update(key("x"))
+	m = next.(Model)
+	if len(m.view) != 0 {
+		t.Fatal("archived job should leave the active tab")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // done tab
+	m = next.(Model)
+	if len(m.view) != 1 || m.view[0].Key != "a" {
+		t.Fatalf("done tab: %+v", m.view)
+	}
+	next, _ = m.Update(key("c")) // undo
+	m = next.(Model)
+	if len(m.view) != 0 || m.states.Get("a") != "" {
+		t.Fatal("pressing c again should undo")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // archived tab
+	m = next.(Model)
+	if len(m.view) != 1 || m.view[0].Key != "b" {
+		t.Fatalf("archived tab: %+v", m.view)
+	}
+	if !strings.Contains(m.View(), "archived 1") {
+		t.Error("header should count archived jobs")
 	}
 }
 

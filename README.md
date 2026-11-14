@@ -29,7 +29,9 @@ jobberwocky is a front end for an [ai-job-search](https://github.com/ai-job-sear
 | `p` | **Fill** each job's application form | Asks for each form link in turn (prefilled with the posting URL; `tab` skips a job). Each runs `tools/fill_form.py` in its own Chrome window and profile, and works on Google Forms and ordinary careers-portal forms. **It never submits.** You check every answer and press Submit yourself. |
 | `o` | Open the posting in your browser | |
 | `t` | Task tray: logs, cost per task, `x` to cancel | |
-| `/` `a` `R` `?` | filter · show hidden · reload · help | |
+| `c` / `x` | **Done** (applied or finished) / **archive** (not interested). Works on marked jobs too, and pressing the key again undoes it. | Saved in `~/.local/share/jobberwocky/states.json`. Your workspace job list is never changed. |
+| `tab` | Switch list: **active · done · archived · all** | |
+| `/` `R` `?` | filter · reload · help | |
 
 Columns: rank score · freshness (🟢 posted ≤1 day ago, 🟡 ≤7 days, 🔴 older, ⚪ unknown) · quick fit (H/M/L) · ✓ fit checked / ✎ drafted.
 
