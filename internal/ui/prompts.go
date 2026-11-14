@@ -52,7 +52,10 @@ Run only Step 0 and Step 1 of /apply (fetch the posting, run the integrity gate,
 %s
 (%s at %s)
 
-Do not draft a CV or cover letter and do not write any files. End with the evaluation in the usual format: score out of 100, verdict, posted date and freshness, applicants if shown, open or closed, strengths, gaps, deal-breaker checks, and every [PAUL] blank the application form will need.`,
+Do not draft a CV or cover letter and do not write any files.
+Start your answer with exactly one line in this form, and nothing before it:
+FIT: <score>/100 · <verdict, e.g. Strong Fit> · <apply / consider / skip>
+Then give the evaluation in the usual format: score out of 100, verdict, posted date and freshness, applicants if shown, open or closed, strengths, gaps, deal-breaker checks, and every [PAUL] blank the application form will need.`,
 		headless, j.URL, j.Title, j.Company)
 }
 

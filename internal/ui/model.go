@@ -47,8 +47,9 @@ type Model struct {
 	states  *states.Store
 	top     map[string]int // job key -> top-pick rank 1..3
 
-	trackerSt map[string]string // job key -> status in job_search_tracker.csv
-	marked    map[string]bool   // jobs selected with space; f, d, r and p act on all of them
+	trackerSt map[string]string  // job key -> status in job_search_tracker.csv
+	docs      map[string]docInfo // job key -> which stage files exist
+	marked    map[string]bool    // jobs selected with space; f, d, r and p act on all of them
 
 	fillQueue []workspace.Job // marked jobs still waiting for their form URL
 	fillTotal int
@@ -96,8 +97,8 @@ func New(cfg *config.Config) (Model, error) {
 		cfg: cfg, run: newRunner(cfg), filter: f, input: in, spin: sp,
 		byID: map[int]*Task{}, doc: viewport.New(80, 20),
 		marked: map[string]bool{}, fillSlot: map[int]int{}, states: states.Load(cfg.DataDir),
-		trackerSt: map[string]string{},
-		status:    "s scrape · r rank · f fit check · d draft · p fill form · ? help",
+		trackerSt: map[string]string{}, docs: map[string]docInfo{},
+		status: defaultHint,
 	}
 	return m, nil
 }
@@ -116,20 +117,6 @@ func (m Model) reload() tea.Cmd {
 	}
 }
 
-// listTab is which slice of jobs the list shows; tab cycles through them.
-type listTab int
-
-const (
-	tabActive listTab = iota
-	tabDone
-	tabArchived
-	tabAll
-)
-
-var tabNames = []string{"active", "done", "archived", "all"}
-
-// inTab: active hides done, archived and the workspace's skipped/expired
-// statuses; done and archived show only jobberwocky's own states; all shows everything.
 // state is a job's effective state: jobberwocky's own mark, else "done" when
 // the tracker already has the application (anything past drafted).
 func (m Model) state(j workspace.Job) string {
@@ -151,19 +138,6 @@ func (m Model) countState(state string) int {
 		}
 	}
 	return n
-}
-
-func (m Model) inTab(j workspace.Job) bool {
-	st := m.state(j)
-	switch m.tab {
-	case tabActive:
-		return st == "" && !j.Hidden()
-	case tabDone:
-		return st == states.Done
-	case tabArchived:
-		return st == states.Archived
-	}
-	return true
 }
 
 func (m *Model) rebuild() {
@@ -221,22 +195,6 @@ func (m Model) topPicks(now time.Time) map[string]int {
 	return top
 }
 
-// nextStep is what a job needs next on its way to submitted.
-func (m Model) nextStep(j workspace.Job) string {
-	switch {
-	case m.busy("draft", j.Key):
-		return "drafting…"
-	case m.busy("fit", j.Key):
-		return "fit check running…"
-	case m.hasDoc("drafts", j):
-		return "ready to submit (p fill · c done)"
-	case m.hasDoc("fit", j):
-		return "ready to draft (d)"
-	default:
-		return "ready for a fit check (f)"
-	}
-}
-
 func (m Model) selected() (workspace.Job, bool) {
 	if m.cursor < 0 || m.cursor >= len(m.view) {
 		return workspace.Job{}, false
@@ -278,11 +236,6 @@ func (m Model) docPath(kind string, j workspace.Job) string {
 	return filepath.Join(m.cfg.DataDir, kind, unsafeKey.ReplaceAllString(j.Key, "_")+".md")
 }
 
-func (m Model) hasDoc(kind string, j workspace.Job) bool {
-	_, err := os.Stat(m.docPath(kind, j))
-	return err == nil
-}
-
 func (m Model) busy(kind, jobKey string) bool {
 	for _, t := range m.tasks {
 		if t.Kind == kind && t.JobKey == jobKey && (t.State == queued || t.State == running) {
@@ -306,6 +259,8 @@ func (m Model) runningCount() int {
 	}
 	return n
 }
+
+const defaultHint = "s scrape · r rank · f fit · d draft · p fill · c applied · x archive · 1-7 views · space mark · * top 3 · ? help"
 
 func (m *Model) setStatus(format string, a ...any) { m.status = fmt.Sprintf(format, a...) }
 
@@ -333,6 +288,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.trackerSt[j.Key] = st
 			}
 		}
+		m.refreshDocs()
 		m.rebuild()
 		return m, nil
 
@@ -432,8 +388,16 @@ func (m Model) finish(msg taskDoneMsg) (tea.Model, tea.Cmd) {
 		m.run.notify("Ranking done", "Shortlist ready in jobberwocky")
 	case "fit":
 		if j, ok := m.jobByKey(t.JobKey); ok {
-			_ = os.WriteFile(m.docPath("fit", j), []byte(msg.result), 0o600)
-			m.setStatus("✓ fit check ready: %s (v to read, d to draft)", j.Company)
+			if strings.TrimSpace(msg.result) == "" {
+				t.State = failed
+				m.setStatus("✗ fit check for %s came back empty; the saved one (if any) is kept", j.Company)
+				break
+			}
+			if err := os.WriteFile(m.docPath("fit", j), []byte(msg.result), 0o600); err != nil {
+				m.setStatus("✗ could not save the fit check: %v", err)
+				break
+			}
+			m.setStatus("✓ fit check saved: %s (v to read, d to draft)", j.Company)
 			m.run.notify("Fit check ready", j.Company+": "+j.Title)
 		}
 	case "draft":
@@ -446,6 +410,10 @@ func (m Model) finish(msg taskDoneMsg) (tea.Model, tea.Cmd) {
 	case "fill":
 		delete(m.fillSlot, t.ID)
 		m.setStatus("✓ form closed. %s", msg.result)
+	}
+	if t.Kind == "fit" || t.Kind == "draft" || t.Kind == "fill" {
+		m.refreshDocs()
+		m.rebuild()
 	}
 	return m, cmd
 }
@@ -528,6 +496,12 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 		m.filter.Focus()
 		return m, textinput.Blink
+	case "1", "2", "3", "4", "5", "6", "7":
+		m.tab = listTab(int(msg.String()[0] - '1'))
+		m.cursor = 0
+		m.clearMarks()
+		m.rebuild()
+		m.setStatus("%s jobs", tabNames[m.tab])
 	case "tab", "shift+tab":
 		step := 1
 		if msg.String() == "shift+tab" {
@@ -594,7 +568,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = min(len(m.view)-1, m.cursor+1)
 			m.setStatus("%d marked · f fit · d draft · r rank · p fill · esc clear", len(m.marked))
 		}
-	case "3":
+	case "*":
 		m.clearMarks()
 		for k := range m.top {
 			m.marked[k] = true

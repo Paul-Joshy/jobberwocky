@@ -35,6 +35,18 @@ type Job struct {
 	Gaps            []string `json:"gaps"`
 
 	Pending bool `json:"-"` // found this run, quick fit not stored yet
+
+	// From a saved fit check (jobberwocky's data dir), never from seen_jobs.json.
+	FitScore   *float64 `json:"-"`
+	FitVerdict string   `json:"-"`
+}
+
+// Score is the best score known: a fit check beats the /rank score.
+func (j Job) Score() *float64 {
+	if j.FitScore != nil {
+		return j.FitScore
+	}
+	return j.RankScore
 }
 
 // StatePath is the seen-jobs file inside a workspace.
@@ -102,12 +114,12 @@ func (j Job) Fresh(now time.Time) string {
 }
 
 // Band is the job's fit band: "high", "medium", "low" or "" (not rated yet).
-// A rank score beats the quick fit. Thresholds follow the evaluation
+// A fit-check score beats a rank score, which beats the quick fit. Thresholds follow the evaluation
 // framework's verdicts: 60+ is Strong or Good Fit (apply), 45-59 Moderate
 // (consider), below 45 Weak or Poor (skip).
 func (j Job) Band() string {
-	if j.RankScore != nil {
-		switch s := *j.RankScore; {
+	if sc := j.Score(); sc != nil {
+		switch s := *sc; {
 		case s >= 60:
 			return "high"
 		case s >= 45:
@@ -146,11 +158,12 @@ func Sort(jobs []Job, now time.Time) {
 		if oa, ob := bandOrder(ja.Band()), bandOrder(jb.Band()); oa != ob {
 			return oa < ob
 		}
-		if (ja.RankScore != nil) != (jb.RankScore != nil) {
-			return ja.RankScore != nil
+		sa, sb := ja.Score(), jb.Score()
+		if (sa != nil) != (sb != nil) {
+			return sa != nil
 		}
-		if ja.RankScore != nil && *ja.RankScore != *jb.RankScore {
-			return *ja.RankScore > *jb.RankScore
+		if sa != nil && *sa != *sb {
+			return *sa > *sb
 		}
 		da, _ := ja.AgeDays(now)
 		db, _ := jb.AgeDays(now)

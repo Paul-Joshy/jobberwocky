@@ -80,7 +80,11 @@ func Run(ctx context.Context, cfg *config.Config, prompt, model string, onStep f
 			}
 		case "result":
 			gotResult = true
-			res.Text, res.CostUSD = ev.Result, ev.Cost
+			// a run can emit more than one result event; never let a later empty one erase the answer
+			if strings.TrimSpace(ev.Result) != "" {
+				res.Text = ev.Result
+			}
+			res.CostUSD += ev.Cost
 			if ev.IsError {
 				res.Err = fmt.Errorf("claude reported an error: %s", firstLine(ev.Result))
 			}

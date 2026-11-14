@@ -27,7 +27,7 @@ var (
 			BorderForeground(lipgloss.Color("238")).PaddingLeft(1)
 )
 
-func (m Model) bodyHeight() int { return max(3, m.h-3) }
+func (m Model) bodyHeight() int { return max(3, m.h-4) } // list mode: 2 header + 2 footer lines
 
 // fit pads or truncates s to exactly w terminal cells.
 func fit(s string, w int) string {
@@ -65,7 +65,8 @@ func (m Model) View() string {
 }
 
 func (m Model) frame(head, body, foot string) string {
-	bh := m.bodyHeight()
+	heads, foots := strings.Split(head, "\n"), strings.Split(foot, "\n")
+	bh := max(1, m.h-len(heads)-len(foots))
 	lines := strings.Split(body, "\n")
 	if len(lines) > bh {
 		lines = lines[:bh]
@@ -73,7 +74,7 @@ func (m Model) frame(head, body, foot string) string {
 	for len(lines) < bh {
 		lines = append(lines, "")
 	}
-	all := append(append([]string{head}, lines...), strings.Split(foot, "\n")...)
+	all := append(append(heads, lines...), foots...)
 	clamp := lipgloss.NewStyle().MaxWidth(m.w)
 	for i, l := range all {
 		all[i] = clamp.Render(l)
@@ -88,25 +89,25 @@ func (m Model) header() string {
 			ranked++
 		}
 	}
-	tabs := ""
-	counts := []string{"", fmt.Sprint(m.countState(states.Done)), fmt.Sprint(m.countState(states.Archived)), ""}
+	counts := m.tabCounts()
+	var tabs []string
 	for i, name := range tabNames {
-		label := name
-		if counts[i] != "" && counts[i] != "0" {
-			label += " " + counts[i]
+		label := fmt.Sprintf("%d %s", i+1, name)
+		if counts[i] > 0 && listTab(i) != tabAll {
+			label += fmt.Sprintf(" %d", counts[i])
 		}
 		if listTab(i) == m.tab {
-			tabs += styleSel.Render(" "+label+" ") + " "
+			tabs = append(tabs, styleSel.Render(" "+label+" "))
 		} else {
-			tabs += styleDim.Render(" "+label+" ") + " "
+			tabs = append(tabs, styleDim.Render(" "+label+" "))
 		}
 	}
-	h := styleTitle.Render("jobberwocky") + "  " + tabs + styleDim.Render(fmt.Sprintf("%d shown · %d ranked", len(m.view), ranked))
+	h := styleTitle.Render("jobberwocky") + styleDim.Render(fmt.Sprintf("  %d shown · %d ranked · stages F fit · D draft · P form prefilled · A applied", len(m.view), ranked))
 	if len(m.pending) > 0 {
 		h += styleAccent.Render(fmt.Sprintf(" · %d new", len(m.pending)))
 	}
 	if len(m.top) > 0 {
-		h += styleTop.Render(fmt.Sprintf(" · ★ %d top picks (3 marks them)", len(m.top)))
+		h += styleTop.Render(fmt.Sprintf(" · ★ %d top picks (* marks them)", len(m.top)))
 	}
 	if len(m.marked) > 0 {
 		h += styleAccent.Render(fmt.Sprintf(" · ● %d marked", len(m.marked)))
@@ -114,7 +115,7 @@ func (m Model) header() string {
 	if m.filtering || m.filter.Value() != "" {
 		h += "  " + m.filter.View()
 	}
-	return h
+	return h + "\n" + strings.Join(tabs, " ")
 }
 
 func (m Model) footer() string {
@@ -178,7 +179,8 @@ func (m Model) listAndDetail() string {
 	}
 	now := time.Now()
 	compW, locW := 18, 14
-	titleW := max(10, listW-2-4-3-2-compW-locW-4)
+	// fixed cells: mark 1, star 1, score 3, fresh 2, band 1, stages 4, plus 7 spaces
+	titleW := max(10, listW-19-compW-locW-3)
 	var rows []string
 	if len(m.view) == 0 {
 		empty := map[listTab]string{
@@ -192,16 +194,13 @@ func (m Model) listAndDetail() string {
 	for i := off; i < len(m.view) && i < off+bh; i++ {
 		j := m.view[i]
 		score := "  ·"
-		if j.RankScore != nil {
+		switch {
+		case j.FitScore != nil: // from your fit check: the most reliable score
+			score = styleOK.Render(fmt.Sprintf("%3.0f", *j.FitScore))
+		case j.RankScore != nil:
 			score = fmt.Sprintf("%3.0f", *j.RankScore)
-		} else if j.Pending {
+		case j.Pending:
 			score = styleAccent.Render("new")
-		}
-		marks := ""
-		if m.hasDoc("drafts", j) {
-			marks = "✎"
-		} else if m.hasDoc("fit", j) {
-			marks = "✓"
 		}
 		sel := " "
 		if m.marked[j.Key] {
@@ -214,11 +213,11 @@ func (m Model) listAndDetail() string {
 			title = styleTop.Render(title)
 		}
 		row := fmt.Sprintf("%s%s%s %s %s %s %s %s %s",
-			sel, star, score, j.Fresh(now), fitGlyph(j.Band()), fit(marks, 1),
+			sel, star, score, j.Fresh(now), fitGlyph(j.Band()), m.stageStrip(j),
 			title, fit(j.Company, compW), fit(j.Location, locW))
 		// rows carry colour codes, so cut them with an ANSI-aware width limit
 		if i == m.cursor {
-			row = styleSel.Width(listW).MaxWidth(listW).Render(row)
+			row = styleSel.Inline(true).MaxWidth(listW).Render(row + strings.Repeat(" ", listW))
 		} else {
 			row = lipgloss.NewStyle().MaxWidth(listW).Render(row)
 		}
@@ -240,14 +239,15 @@ func (m Model) listAndDetail() string {
 func (m Model) detailText(j workspace.Job, w int) string {
 	var b strings.Builder
 	if rank, ok := m.top[j.Key]; ok {
-		b.WriteString(styleTop.Render(fmt.Sprintf("★ TOP PICK #%d · %s", rank, m.nextStep(j))) + "\n\n")
+		b.WriteString(styleTop.Render(fmt.Sprintf("★ TOP PICK #%d", rank)) + "\n")
 	}
 	b.WriteString(styleTitle.Render(j.Title) + "\n")
 	b.WriteString(j.Company)
 	if j.Location != "" {
 		b.WriteString(" · " + j.Location)
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n\n" + m.progress(j) + "\n")
+	b.WriteString(styleAccent.Render("next: "+m.nextStep(j)) + styleDim.Render("   v read · o open") + "\n\n")
 	now := time.Now()
 	posted := j.PostedDate
 	if posted == "" {
@@ -291,17 +291,6 @@ func (m Model) detailText(j workspace.Job, w int) string {
 			b.WriteString("- " + s + "\n")
 		}
 	}
-	b.WriteString("\n")
-	switch {
-	case m.hasDoc("drafts", j):
-		b.WriteString(styleOK.Render("✎ drafted") + styleDim.Render(" · v read · p fill form"))
-	case m.hasDoc("fit", j):
-		b.WriteString(styleOK.Render("✓ fit check saved") + styleDim.Render(" · v read · d draft"))
-	case m.busy("fit", j.Key):
-		b.WriteString(m.spin.View() + " fit check running")
-	default:
-		b.WriteString(styleDim.Render("f fit check · o open posting"))
-	}
 	return b.String()
 }
 
@@ -336,9 +325,14 @@ func (m Model) tasksView() string {
 const helpText = `  Jobs list
     ↑/↓ j/k   move               g/G    top / bottom
     /         filter
-    tab       switch list: active · done · archived · all (shift+tab back)
-    c         mark done (applied / finished)    press again to undo
-    x         archive (not interested)          press again to restore
+  Views (number keys jump, tab / shift+tab cycle)
+    1 active   everything in progress       5 done      applied or finished
+    2 to check no fit check yet             6 archived  not interested
+    3 checked  fit checked, not drafted     7 all       everything
+    4 drafted  drafted, not applied yet
+
+  Mark a job (works on ● marked jobs too; press again to undo)
+    c         applied / done                    x   archive (never deletes)
     enter, v  read fit check / draft for the job
     o         open the posting in your browser
     R         reload from seen_jobs.json
@@ -347,7 +341,7 @@ const helpText = `  Jobs list
   L (below 45), then jobs not rated yet. Within a band: score, then freshest.
 
   Select several (f, d, r and p then act on all marked jobs at once)
-    3         mark the ★ top 3 picks
+    *         mark the ★ top 3 picks
     space     mark / unmark and move down     ctrl+a  mark all shown
     esc, u    clear marks
 
@@ -365,6 +359,9 @@ const helpText = `  Jobs list
   Tasks
     t         task tray: enter for the log, x to cancel
 
-  Columns: ● marked · ★ top pick · score · freshness (🟢 ≤1 day, 🟡 ≤7, 🔴 older, ⚪ unknown) · quick fit · ✓ fit / ✎ drafted
+  Stages per row: F fit checked · D drafted · P form prefilled · A applied
+  (… = running now). Fit checks are saved and survive restarts.
+
+  Columns: ● marked · ★ top pick · score (green = from your fit check) · freshness (🟢 ≤1 day, 🟡 ≤7, 🔴 older, ⚪ unknown) · quick fit · ✓ fit / ✎ drafted
 
     q         quit (asks again if tasks are running)`

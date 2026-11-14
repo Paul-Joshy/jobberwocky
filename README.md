@@ -30,10 +30,13 @@ jobberwocky is a front end for an [ai-job-search](https://github.com/ai-job-sear
 | `o` | Open the posting in your browser | |
 | `t` | Task tray: logs, cost per task, `x` to cancel | |
 | `c` / `x` | **Done** (applied or finished) / **archive** (not interested). Works on marked jobs too, and pressing the key again undoes it. | Saved in `~/.local/share/jobberwocky/states.json`. Your workspace job list is never changed. |
-| `tab` | Switch list: **active · done · archived · all** | |
+| `1`–`7` / `tab` | Views: **1 active · 2 to check · 3 checked · 4 drafted · 5 done · 6 archived · 7 all**, with counts | |
+| `*` | Mark the ★ top 3 picks | |
 | `/` `R` `?` | filter · reload · help | |
 
-Columns: rank score · freshness (🟢 posted ≤1 day ago, 🟡 ≤7 days, 🔴 older, ⚪ unknown) · quick fit (H/M/L) · ✓ fit checked / ✎ drafted.
+Columns: ● marked · ★ top pick · score (green when it comes from your saved fit check) · freshness (🟢 posted ≤1 day ago, 🟡 ≤7 days, 🔴 older, ⚪ unknown) · band (H/M/L) · stages **F D P A** (fit checked, drafted, form prefilled, applied; lit when done, `…` while running).
+
+Fit checks, drafts and form reports are saved in `~/.local/share/jobberwocky/` and survive restarts. A fit check's score beats the `/rank` score for sorting.
 
 ## Install
 

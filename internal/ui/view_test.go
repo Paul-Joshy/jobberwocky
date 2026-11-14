@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,6 +19,9 @@ func score(v float64) *float64 { return &v }
 func testModel(t *testing.T, w, h int) Model {
 	t.Helper()
 	cfg := &config.Config{Workspace: t.TempDir(), DataDir: t.TempDir(), MaxParallelClaude: 1}
+	for _, sub := range []string{"fit", "drafts", "forms"} {
+		os.MkdirAll(filepath.Join(cfg.DataDir, sub), 0o700)
+	}
 	m, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +36,7 @@ func testModel(t *testing.T, w, h int) Model {
 }
 
 func TestViewRendersAndHidesSkipped(t *testing.T) {
-	for _, size := range [][2]int{{140, 30}, {80, 20}, {30, 6}} {
+	for _, size := range [][2]int{{170, 30}, {140, 30}, {100, 20}, {80, 20}, {30, 6}} {
 		m := testModel(t, size[0], size[1])
 		out := m.View()
 		if !strings.Contains(out, "Senior Co") || !strings.Contains(out, "jobberwocky") {
@@ -41,6 +46,10 @@ func TestViewRendersAndHidesSkipped(t *testing.T) {
 			t.Fatalf("%v: skipped job should be hidden", size)
 		}
 		lines := strings.Split(out, "\n")
+		// one job per row: the second job sits on the line right after the first (no wrapping)
+		if size[1] > 6 && !strings.Contains(lines[3], "Beta") {
+			t.Errorf("%v: row 2 should be Beta, got %q (a row wrapped?)", size, lines[3])
+		}
 		if len(lines) != size[1] {
 			t.Errorf("%v: view has %d lines, want %d", size, len(lines), size[1])
 		}
@@ -54,10 +63,8 @@ func TestViewRendersAndHidesSkipped(t *testing.T) {
 
 func TestShowAllAndFilter(t *testing.T) {
 	m := testModel(t, 120, 30)
-	for i := 0; i < 3; i++ { // active → done → archived → all
-		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-		m = next.(Model)
-	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("7")}) // all
+	m = next.(Model)
 	if m.tab != tabAll || len(m.view) != 3 {
 		t.Fatalf("all tab: got tab %d with %d jobs", m.tab, len(m.view))
 	}
@@ -108,7 +115,7 @@ func TestDoneAndArchiveTabs(t *testing.T) {
 	if len(m.view) != 0 {
 		t.Fatal("archived job should leave the active tab")
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // done tab
+	next, _ = m.Update(key("5")) // done view
 	m = next.(Model)
 	if len(m.view) != 1 || m.view[0].Key != "a" {
 		t.Fatalf("done tab: %+v", m.view)
@@ -118,12 +125,12 @@ func TestDoneAndArchiveTabs(t *testing.T) {
 	if len(m.view) != 0 || m.states.Get("a") != "" {
 		t.Fatal("pressing c again should undo")
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // archived tab
+	next, _ = m.Update(key("6")) // archived view
 	m = next.(Model)
 	if len(m.view) != 1 || m.view[0].Key != "b" {
 		t.Fatalf("archived tab: %+v", m.view)
 	}
-	if !strings.Contains(m.View(), "archived 1") {
+	if !strings.Contains(m.View(), "6 archived 1") {
 		t.Error("header should count archived jobs")
 	}
 }
@@ -156,7 +163,7 @@ func TestTopPicks(t *testing.T) {
 	if m.top["m2"] != 3 || len(m.top) != 3 {
 		t.Fatalf("after done: top = %v", m.top)
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("*")})
 	m = next.(Model)
 	if len(m.marked) != 3 || !m.marked["h2"] || !m.marked["m2"] {
 		t.Fatalf("3 should mark the picks, got %v", m.marked)
