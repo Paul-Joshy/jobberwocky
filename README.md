@@ -36,7 +36,17 @@ jobberwocky is a front end for an [ai-job-search](https://github.com/ai-job-sear
 
 Columns: ● marked · ★ top pick · score (green when it comes from your saved fit check) · freshness (🟢 posted ≤1 day ago, 🟡 ≤7 days, 🔴 older, ⚪ unknown) · band (H/M/L) · stages **F D P A** (fit checked, drafted, form prefilled, applied; lit when done, `…` while running).
 
-Fit checks, drafts and form reports are saved in `~/.local/share/jobberwocky/` and survive restarts. A fit check's score beats the `/rank` score for sorting.
+Fit checks, drafts and form reports are saved in `~/.local/share/jobberwocky/` and survive restarts.
+
+### Tasks keep running when you quit
+
+With [tmux](https://github.com/tmux/tmux) installed (`brew install tmux`), every rank, fit check, draft and form fill runs in its own detached tmux session (`jw-…`). Quitting jobberwocky, or closing the terminal, doesn't stop them: open jobberwocky again and it picks up every task that is still running, plus any that finished while it was closed, and saves their results as usual. Only a scrape, and tasks still queued for a free slot, stop when you quit.
+
+- `tmux ls` lists the running sessions; `tmux attach -t jw-…` shows one live (detach with `ctrl+b d`).
+- `x` in the task tray (`t`) still cancels a task and ends its session.
+- Each run's prompt, output and exit code are in `~/.local/share/jobberwocky/runs/<run>/`.
+
+Without tmux, tasks run inside jobberwocky and stop when it quits. A fit check's score beats the `/rank` score for sorting.
 
 ## Install
 

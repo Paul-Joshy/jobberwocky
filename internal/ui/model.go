@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"github.com/Paul-Joshy/jobberwocky/internal/run"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,7 +104,16 @@ func New(cfg *config.Config) (Model, error) {
 	return m, nil
 }
 
-func (m Model) Init() tea.Cmd { return tea.Batch(m.spin.Tick, m.reload()) }
+func (m Model) Init() tea.Cmd { return tea.Batch(m.spin.Tick, m.reload(), m.recoverRuns()) }
+
+type recoveredMsg struct{ runs []run.Run }
+
+// recoverRuns finds tmux runs from an earlier session that are still going,
+// or that finished while the UI was closed and haven't been processed.
+func (m Model) recoverRuns() tea.Cmd {
+	root := filepath.Join(m.cfg.DataDir, "runs")
+	return func() tea.Msg { return recoveredMsg{runs: run.Pending(root)} }
+}
 
 func (m Model) reload() tea.Cmd {
 	ws := m.cfg.Workspace
@@ -303,6 +313,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.run.startClaude(t, quickFitPrompt(msg.file), m.cfg.QuickFitModel, "low")
 		return m, nil
 
+	case recoveredMsg:
+		for i := range msg.runs {
+			rn := msg.runs[i]
+			t := m.run.newTask(rn.Meta.Kind, rn.Meta.Label, rn.Meta.JobKey)
+			t.run, t.LogPath = &rn, rn.Out()
+			m.addTask(t)
+			if rn.Meta.Kind == "fill" && rn.Meta.Slot > 0 {
+				m.fillSlot[t.ID] = rn.Meta.Slot
+			}
+			m.run.resume(t, &rn)
+		}
+		if n := len(msg.runs); n > 0 {
+			m.setStatus("picked up %d task(s) from last time (t to see them)", n)
+		}
+		return m, nil
+
+	case taskRunMsg:
+		if t := m.byID[msg.id]; t != nil {
+			t.run, t.LogPath = msg.run, msg.run.Out()
+		}
+		return m, nil
+
 	case taskStartMsg:
 		if t := m.byID[msg.id]; t != nil {
 			t.State, t.Started = running, time.Now()
@@ -361,6 +393,9 @@ func (m Model) finish(msg taskDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	t.Ended, t.Result, t.Cost, t.Err = time.Now(), msg.result, msg.cost, msg.err
+	if t.run != nil {
+		t.run.MarkCollected()
+	}
 	if t.Started.IsZero() {
 		t.Started = t.Ended
 	}
@@ -472,14 +507,22 @@ func lastLine(s string) string {
 	return s
 }
 
+// quit leaves tmux runs going (the next start picks them up) and stops only
+// in-process work: a scrape, or tasks still queued for a free slot.
 func (m Model) quit() (tea.Model, tea.Cmd) {
-	if m.runningCount() > 0 && !m.quitArmed {
+	lost := 0
+	for _, t := range m.tasks {
+		if (t.State == queued || t.State == running) && t.run == nil {
+			lost++
+		}
+	}
+	if lost > 0 && !m.quitArmed {
 		m.quitArmed = true
-		m.setStatus("%d task(s) still running. Press q again to stop them and quit.", m.runningCount())
+		m.setStatus("%d task(s) not in tmux yet (queued or scraping) will stop. Press q again to quit; tmux tasks keep running.", lost)
 		return m, nil
 	}
 	for _, t := range m.tasks {
-		if t.cancel != nil {
+		if t.cancel != nil && t.run == nil {
 			t.cancel()
 		}
 	}
@@ -792,7 +835,7 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fillSlot[t.ID] = slot
 		profile := filepath.Join(m.cfg.DataDir, "chrome", fmt.Sprintf("slot-%d", slot))
 		report := strings.TrimSuffix(m.docPath("forms", j), ".md") + ".json"
-		m.run.startExec(t, m.cfg.FormPython, "tools/fill_form.py", url, "--report", report, "--profile", profile)
+		m.run.startExec(t, slot, m.cfg.FormPython, "tools/fill_form.py", url, "--report", report, "--profile", profile)
 		m.setStatus("filling %s in its own Chrome window. It never submits: check it and press Submit yourself.", j.Company)
 		m.askNextForm()
 		return m, textinput.Blink

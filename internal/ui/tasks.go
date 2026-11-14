@@ -3,6 +3,7 @@ package ui
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/Paul-Joshy/jobberwocky/internal/claude"
 	"github.com/Paul-Joshy/jobberwocky/internal/config"
+	"github.com/Paul-Joshy/jobberwocky/internal/run"
 	"github.com/Paul-Joshy/jobberwocky/internal/scrape"
 	"github.com/Paul-Joshy/jobberwocky/internal/workspace"
 )
@@ -55,6 +57,7 @@ type Task struct {
 	Err     error
 	LogPath string
 	cancel  context.CancelFunc
+	run     *run.Run // set when the task runs in tmux and survives a UI restart
 }
 
 func (t *Task) Last() string {
@@ -98,6 +101,7 @@ type runner struct {
 	claudeSem chan struct{}
 	mu        sync.Mutex
 	nextID    int
+	nextRun   int
 }
 
 func newRunner(cfg *config.Config) *runner {
@@ -128,7 +132,9 @@ type nopCloser struct{ io.Writer }
 
 func (nopCloser) Close() error { return nil }
 
-// startClaude runs a prompt in the background, queued behind the parallel limit.
+// startClaude runs a prompt in the background, queued behind the parallel
+// limit. With tmux installed it runs in a detached session, so it keeps going
+// if the UI quits; otherwise it runs in-process.
 func (r *runner) startClaude(t *Task, prompt, model, effort string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
@@ -140,6 +146,16 @@ func (r *runner) startClaude(t *Task, prompt, model, effort string) {
 			return
 		}
 		defer func() { <-r.claudeSem }()
+		if run.Available() {
+			argv := append([]string{r.cfg.Claude}, claude.Args(r.cfg, model, effort)...)
+			rn, err := r.startRun(t, "", false, 0, prompt, argv)
+			if err != nil {
+				send(taskDoneMsg{id: t.ID, err: err})
+				return
+			}
+			r.follow(ctx, t.ID, rn)
+			return
+		}
 		send(taskStartMsg{id: t.ID})
 		log := openLog(t.LogPath)
 		defer log.Close()
@@ -147,6 +163,87 @@ func (r *runner) startClaude(t *Task, prompt, model, effort string) {
 		res := claude.Run(ctx, r.cfg, prompt, model, effort, func(s string) { send(taskLineMsg{id: t.ID, line: s}) }, log)
 		send(taskDoneMsg{id: t.ID, result: res.Text, cost: res.CostUSD, err: res.Err})
 	}()
+}
+
+// startRun writes the run folder and starts it in tmux. The task's run and
+// log path are set by the UI on taskStartMsg (tasks are owned by the UI loop).
+func (r *runner) startRun(t *Task, cwd string, isExec bool, slot int, stdin string, argv []string) (*run.Run, error) {
+	r.mu.Lock()
+	r.nextRun++
+	n := r.nextRun
+	r.mu.Unlock()
+	id := fmt.Sprintf("%s-%d-%d-%s", time.Now().Format("20060102-150405"), os.Getpid(), n, t.Kind)
+	rn, err := run.New(filepath.Join(r.cfg.DataDir, "runs"), run.Meta{
+		ID: id, Kind: t.Kind, Label: t.Label, JobKey: t.JobKey, Exec: isExec, Slot: slot, Started: time.Now(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if cwd == "" {
+		cwd = r.cfg.Workspace
+	}
+	if err := rn.Start(cwd, runEnv(r.cfg), stdin, argv); err != nil {
+		return nil, err
+	}
+	return &rn, nil
+}
+
+// runEnv is what a tmux run needs on top of the tmux server's environment:
+// the PATH with the configured bun and python first.
+func runEnv(cfg *config.Config) map[string]string {
+	env := map[string]string{}
+	for _, kv := range claude.Env(cfg) {
+		if strings.HasPrefix(kv, "PATH=") {
+			env["PATH"] = strings.TrimPrefix(kv, "PATH=")
+		}
+	}
+	return env
+}
+
+type taskRunMsg struct {
+	id  int
+	run *run.Run
+}
+
+// follow streams a tmux run's output to the UI until it ends. It is used for
+// new runs and for runs picked up again after a restart.
+func (r *runner) follow(ctx context.Context, id int, rn *run.Run) {
+	send(taskRunMsg{id: id, run: rn})
+	send(taskStartMsg{id: id})
+	if rn.Meta.Exec {
+		var summary string
+		err := rn.Follow(ctx, func(b []byte) {
+			if line := string(b); isFillSummary(line) {
+				summary = line
+				send(taskLineMsg{id: id, line: line})
+			}
+		})
+		send(taskDoneMsg{id: id, result: summary, err: err})
+		return
+	}
+	var p claude.Parser
+	err := rn.Follow(ctx, func(b []byte) {
+		for _, s := range p.Line(b) {
+			send(taskLineMsg{id: id, line: s})
+		}
+	})
+	if errors.Is(err, context.Canceled) || errors.Is(err, run.ErrLost) {
+		send(taskDoneMsg{id: id, err: err})
+		return
+	}
+	res := p.Result(err)
+	send(taskDoneMsg{id: id, result: res.Text, cost: res.CostUSD, err: res.Err})
+}
+
+// resume follows a run left over from an earlier session of the UI.
+func (r *runner) resume(t *Task, rn *run.Run) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.cancel = cancel
+	go r.follow(ctx, t.ID, rn)
+}
+
+func isFillSummary(line string) bool {
+	return strings.HasPrefix(line, "FILLED ") || strings.HasPrefix(line, "READY_FOR_REVIEW") || strings.HasPrefix(line, "error")
 }
 
 // startScrape runs the portal CLIs and dedupes; it hands new hits to the quick-fit step.
@@ -182,10 +279,21 @@ func (r *runner) startScrape(t *Task) {
 }
 
 // startExec runs a plain command (the form filler) and streams its output.
-func (r *runner) startExec(t *Task, name string, args ...string) {
+// With tmux it runs in a detached session, so the form window stays open
+// even if the UI quits.
+func (r *runner) startExec(t *Task, slot int, name string, args ...string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
 	go func() {
+		if run.Available() {
+			rn, err := r.startRun(t, "", true, slot, "", append([]string{name}, args...))
+			if err != nil {
+				send(taskDoneMsg{id: t.ID, err: err})
+				return
+			}
+			r.follow(ctx, t.ID, rn)
+			return
+		}
 		send(taskStartMsg{id: t.ID})
 		log := openLog(t.LogPath)
 		defer log.Close()
@@ -207,7 +315,7 @@ func (r *runner) startExec(t *Task, name string, args ...string) {
 		for sc.Scan() {
 			line := sc.Text()
 			fmt.Fprintln(log, line)
-			if strings.HasPrefix(line, "FILLED ") || strings.HasPrefix(line, "READY_FOR_REVIEW") || strings.HasPrefix(line, "error") {
+			if isFillSummary(line) {
 				summary = line
 				send(taskLineMsg{id: t.ID, line: line})
 			}
