@@ -22,10 +22,11 @@ jobberwocky is a front end for an [ai-job-search](https://github.com/ai-job-sear
 | Key | Step | How it runs |
 |---|---|---|
 | `s` | **Scrape**: every configured portal search, in parallel, then dedupe against jobs you've already seen and your application tracker | Portal CLIs (`bun`) + `tools/scrape_state.py`. No AI. New hits then get a quick fit and are stored by a small, cheap model (`haiku` by default). |
-| `r` | **Rank** new jobs against your full fit framework | `claude -p "/rank"` |
-| `f` | **Fit check** the selected job | `claude -p` running `/apply` Steps 0–1 only. The result is saved, and you read it with `v`. |
-| `d` | **Draft** a tailored CV and cover letter (only after a fit check) | `claude -p "/apply …"`: compiles, checks, records it as drafted, and lists any questions instead of asking them |
-| `p` | **Fill** a Google Form application | `tools/fill_form.py` (Playwright, your installed Chrome). **It never submits.** You check every answer and press Submit yourself. |
+| `space` `ctrl+a` `esc` | **Mark** jobs (● in the first column): `r`, `f`, `d` and `p` then act on every marked job at once, in parallel | |
+| `r` | **Rank** the marked jobs, or all new jobs when nothing is marked | One `claude -p "/rank"` run that scores the jobs in parallel. Only one ranker runs at a time, because it's the only process allowed to write `seen_jobs.json`. |
+| `f` | **Fit check** each marked job (or the one under the cursor) | One `claude -p` per job, running `/apply` Steps 0–1 only, `max_parallel_claude` at a time. Read the result with `v`. |
+| `d` | **Draft** a tailored CV and cover letter for each (each job needs a fit check first) | One `claude -p "/apply …"` per job, in parallel. Each compiles and checks its own files, then hands back its record command. jobberwocky runs those one at a time, so parallel drafts never overwrite each other's tracker or STATUS changes. Questions are listed, never asked. |
+| `p` | **Fill** each job's application form | Asks for each form link in turn (prefilled with the posting URL; `tab` skips a job). Each runs `tools/fill_form.py` in its own Chrome window and profile, and works on Google Forms and ordinary careers-portal forms. **It never submits.** You check every answer and press Submit yourself. |
 | `o` | Open the posting in your browser | |
 | `t` | Task tray: logs, cost per task, `x` to cancel | |
 | `/` `a` `R` `?` | filter · show hidden · reload · help | |

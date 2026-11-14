@@ -93,6 +93,9 @@ func (m Model) header() string {
 	if len(m.pending) > 0 {
 		h += styleAccent.Render(fmt.Sprintf(" · %d new", len(m.pending)))
 	}
+	if len(m.marked) > 0 {
+		h += styleAccent.Render(fmt.Sprintf(" · ● %d marked", len(m.marked)))
+	}
 	if m.filtering || m.filter.Value() != "" {
 		h += "  " + m.filter.View()
 	}
@@ -179,8 +182,12 @@ func (m Model) listAndDetail() string {
 		} else if m.hasDoc("fit", j) {
 			marks = "✓"
 		}
-		row := fmt.Sprintf(" %s %s %s %s %s %s %s",
-			score, j.Fresh(now), fitGlyph(j.Fit), fit(marks, 1),
+		sel := " "
+		if m.marked[j.Key] {
+			sel = styleAccent.Render("●")
+		}
+		row := fmt.Sprintf("%s%s %s %s %s %s %s %s",
+			sel, score, j.Fresh(now), fitGlyph(j.Fit), fit(marks, 1),
 			fit(j.Title, titleW), fit(j.Company, compW), fit(j.Location, locW))
 		// rows carry colour codes, so cut them with an ANSI-aware width limit
 		if i == m.cursor {
@@ -294,13 +301,20 @@ const helpText = `  Jobs list
     o         open the posting in your browser
     R         reload from seen_jobs.json
 
-  Pipeline (each runs in the background; keep working)
-    s         scrape: run portal CLIs in parallel, dedupe, quick-fit new hits
-    r         rank new jobs (claude -p /rank)
-    f         fit check the selected job
-    d         draft CV + cover letter (needs a fit check first)
-    p         fill a Google Form with Playwright. Never submits:
-              you check it and press Submit yourself.
+  Select several (f, d, r and p then act on all marked jobs at once)
+    space     mark / unmark and move down     ctrl+a  mark all shown
+    esc, u    clear marks
+
+  Pipeline (everything runs in the background, in parallel; keep working)
+    s         scrape: portal CLIs in parallel, dedupe, quick-fit new hits
+    r         rank: marked jobs (scored in parallel in one /rank run),
+              or all new jobs when nothing is marked
+    f         fit check the marked jobs (or the one under the cursor)
+    d         draft CV + cover letter for each (needs a fit check first);
+              drafts run in parallel and are recorded one at a time
+    p         fill each one's form in its own Chrome window: you get asked
+              for each form link in turn (tab skips). Never submits:
+              you check each form and press Submit yourself.
 
   Tasks
     t         task tray: enter for the log, x to cancel

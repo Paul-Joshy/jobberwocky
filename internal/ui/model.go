@@ -42,6 +42,11 @@ type Model struct {
 	cursor  int
 	offset  int
 	showAll bool
+	marked  map[string]bool // jobs selected with space; f, d, r and p act on all of them
+
+	fillQueue []workspace.Job // marked jobs still waiting for their form URL
+	fillTotal int
+	fillSlot  map[int]int // fill task id -> Chrome profile slot (one window per form)
 
 	filter    textinput.Model
 	filtering bool
@@ -83,6 +88,7 @@ func New(cfg *config.Config) (Model, error) {
 	m := Model{
 		cfg: cfg, run: newRunner(cfg), filter: f, input: in, spin: sp,
 		byID: map[int]*Task{}, doc: viewport.New(80, 20),
+		marked: map[string]bool{}, fillSlot: map[int]int{},
 		status: "s scrape · r rank · f fit check · d draft · p fill form · ? help",
 	}
 	return m, nil
@@ -123,6 +129,34 @@ func (m Model) selected() (workspace.Job, bool) {
 		return workspace.Job{}, false
 	}
 	return m.view[m.cursor], true
+}
+
+// targets is what an action applies to: every marked job (in list order), or
+// the job under the cursor when nothing is marked. Pending hits are left out:
+// they are not stored yet.
+func (m Model) targets() []workspace.Job {
+	var out []workspace.Job
+	if len(m.marked) > 0 {
+		for _, j := range m.view {
+			if m.marked[j.Key] && !j.Pending {
+				out = append(out, j)
+			}
+		}
+		return out
+	}
+	if j, ok := m.selected(); ok && !j.Pending {
+		out = append(out, j)
+	}
+	return out
+}
+
+func (m *Model) clearMarks() { m.marked = map[string]bool{} }
+
+func names(jobs []workspace.Job) string {
+	if len(jobs) == 1 {
+		return jobs[0].Company
+	}
+	return fmt.Sprintf("%d jobs", len(jobs))
 }
 
 var unsafeKey = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
@@ -212,6 +246,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskDoneMsg:
 		return m.finish(msg)
 
+	case recordDoneMsg:
+		if t := m.byID[msg.id]; t != nil {
+			if msg.err != nil {
+				t.Lines = append(t.Lines, "record failed: "+msg.err.Error()+" "+msg.line)
+				m.setStatus("✗ %s: drafted but not recorded (t for the log)", t.Label)
+			} else {
+				t.Lines = append(t.Lines, "recorded: "+msg.line)
+			}
+		}
+		return m, m.reload()
+
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m.quit()
@@ -277,12 +322,34 @@ func (m Model) finish(msg taskDoneMsg) (tea.Model, tea.Cmd) {
 			_ = os.WriteFile(m.docPath("drafts", j), []byte(msg.result), 0o600)
 			m.setStatus("✓ draft ready: %s (v to read, p to fill the form)", j.Company)
 			m.run.notify("Draft ready", j.Company+": "+j.Title)
+			cmd = m.record(t, msg.result)
 		}
-		cmd = m.reload()
 	case "fill":
+		delete(m.fillSlot, t.ID)
 		m.setStatus("✓ form closed. %s", msg.result)
 	}
 	return m, cmd
+}
+
+type recordDoneMsg struct {
+	id   int
+	line string
+	err  error
+}
+
+// record runs the draft's tracker/STATUS write, serialised with every other draft's.
+func (m Model) record(t *Task, result string) tea.Cmd {
+	args, err := extractRecordCommand(result)
+	if err != nil {
+		t.Lines = append(t.Lines, "not recorded: "+err.Error())
+		return nil
+	}
+	t.Lines = append(t.Lines, "recording (queued behind other drafts)…")
+	run := m.run
+	return func() tea.Msg {
+		line, err := run.runRecord(args)
+		return recordDoneMsg{id: t.ID, line: line, err: err}
+	}
 }
 
 func (m Model) jobByKey(key string) (workspace.Job, bool) {
@@ -367,60 +434,97 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.addTask(t)
 		m.run.startScrape(t)
 		m.setStatus("scraping in the background. Keep browsing; t to watch.")
+	case " ":
+		if j, ok := m.selected(); ok && !j.Pending {
+			if m.marked[j.Key] {
+				delete(m.marked, j.Key)
+			} else {
+				m.marked[j.Key] = true
+			}
+			m.cursor = min(len(m.view)-1, m.cursor+1)
+			m.setStatus("%d marked · f fit · d draft · r rank · p fill · esc clear", len(m.marked))
+		}
+	case "ctrl+a":
+		for _, j := range m.view {
+			if !j.Pending {
+				m.marked[j.Key] = true
+			}
+		}
+		m.setStatus("%d marked · f fit · d draft · r rank · p fill · esc clear", len(m.marked))
+	case "esc", "u":
+		if len(m.marked) > 0 {
+			m.clearMarks()
+			m.setStatus("marks cleared")
+		}
 	case "r":
 		if m.busy("rank", "") {
-			m.setStatus("ranking is already running")
+			m.setStatus("ranking is already running (one ranker at a time: it is the only writer of seen_jobs.json)")
+			break
+		}
+		if len(m.marked) > 0 {
+			jobs := m.targets()
+			t := m.run.newTask("rank", fmt.Sprintf("rank %d marked", len(jobs)), "")
+			m.addTask(t)
+			m.run.startClaude(t, rankSelectedPrompt(jobs), "")
+			m.clearMarks()
+			m.setStatus("ranking %d jobs in parallel inside one /rank run", len(jobs))
 			break
 		}
 		t := m.run.newTask("rank", "rank new jobs", "")
 		m.addTask(t)
 		m.run.startClaude(t, rankPrompt(), "")
-		m.setStatus("ranking in the background (claude -p /rank)")
+		m.setStatus("ranking new jobs in the background (claude -p /rank)")
 	case "f":
-		j, ok := m.selected()
-		if !ok {
+		jobs := m.targets()
+		if len(jobs) == 0 {
+			m.setStatus("nothing to check (new hits need the quick-fit step to finish first)")
 			break
 		}
-		if j.Pending {
-			m.setStatus("wait for the quick-fit step to store this job, then press f")
-			break
+		started := 0
+		for _, j := range jobs {
+			if m.busy("fit", j.Key) {
+				continue
+			}
+			t := m.run.newTask("fit", "fit · "+j.Company+" · "+j.Title, j.Key)
+			m.addTask(t)
+			m.run.startClaude(t, fitPrompt(j), "")
+			started++
 		}
-		if m.busy("fit", j.Key) {
-			m.setStatus("fit check already running for %s", j.Company)
-			break
-		}
-		t := m.run.newTask("fit", "fit · "+j.Company+" · "+j.Title, j.Key)
-		m.addTask(t)
-		m.run.startClaude(t, fitPrompt(j), "")
-		m.setStatus("fit check started for %s. Pick another job meanwhile.", j.Company)
+		m.clearMarks()
+		m.setStatus("%d fit check(s) started, %d at a time. Keep browsing.", started, m.cfg.MaxParallelClaude)
 	case "d":
-		j, ok := m.selected()
-		if !ok {
-			break
+		started, noFit := 0, 0
+		for _, j := range m.targets() {
+			if !m.hasDoc("fit", j) {
+				noFit++
+				continue
+			}
+			if m.busy("draft", j.Key) {
+				continue
+			}
+			fit, _ := os.ReadFile(m.docPath("fit", j))
+			t := m.run.newTask("draft", "draft · "+j.Company+" · "+j.Title, j.Key)
+			m.addTask(t)
+			m.run.startClaude(t, draftPrompt(j, string(fit)), "")
+			started++
 		}
-		if !m.hasDoc("fit", j) {
+		m.clearMarks()
+		switch {
+		case started == 0 && noFit > 0:
 			m.setStatus("fit check first: press f, read it with v, then d")
-			break
+		case noFit > 0:
+			m.setStatus("%d draft(s) started; %d skipped with no fit check yet (press f on them)", started, noFit)
+		default:
+			m.setStatus("%d draft(s) started, %d at a time", started, m.cfg.MaxParallelClaude)
 		}
-		if m.busy("draft", j.Key) {
-			m.setStatus("draft already running for %s", j.Company)
-			break
-		}
-		fit, _ := os.ReadFile(m.docPath("fit", j))
-		t := m.run.newTask("draft", "draft · "+j.Company+" · "+j.Title, j.Key)
-		m.addTask(t)
-		m.run.startClaude(t, draftPrompt(j, string(fit)), "")
-		m.setStatus("drafting CV + cover letter for %s in the background", j.Company)
 	case "p":
-		j, ok := m.selected()
-		if !ok {
+		m.fillQueue = m.targets()
+		m.fillTotal = len(m.fillQueue)
+		m.clearMarks()
+		if m.fillTotal == 0 {
 			break
 		}
-		m.inputJob = j
-		m.input.SetValue("")
-		m.input.Placeholder = "paste the Google Form link (docs.google.com/forms or forms.gle)"
-		m.input.Focus()
-		m.prevMode, m.mode = modeList, modeInput
+		m.askNextForm()
 		return m, textinput.Blink
 	case "o":
 		if j, ok := m.selected(); ok && j.URL != "" {
@@ -471,30 +575,73 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-var formURL = regexp.MustCompile(`^https://(docs\.google\.com/forms/|forms\.gle/)`)
+// formURL accepts any https link: tools/fill_form.py handles Google Forms and,
+// in general mode, ordinary careers-portal forms.
+var formURL = regexp.MustCompile(`^https://[^\s]+$`)
+
+// askNextForm pops the next job off the fill queue and asks for its form link,
+// prefilled with the posting URL (often the form itself on careers portals).
+func (m *Model) askNextForm() {
+	if len(m.fillQueue) == 0 {
+		m.input.Blur()
+		m.mode = modeList
+		return
+	}
+	j := m.fillQueue[0]
+	m.fillQueue = m.fillQueue[1:]
+	m.inputJob = j
+	n := m.fillTotal - len(m.fillQueue)
+	m.input.Prompt = fmt.Sprintf("form for %s (%d/%d) › ", j.Company, n, m.fillTotal)
+	m.input.SetValue(j.URL)
+	m.input.CursorEnd()
+	m.input.Placeholder = "form link · enter fill · tab skip this job · esc stop"
+	m.input.Focus()
+	m.prevMode, m.mode = modeList, modeInput
+}
+
+// freeSlot is the lowest Chrome profile slot no running fill is using, so
+// parallel fills never fight over one profile's lock.
+func (m Model) freeSlot() int {
+	used := map[int]bool{}
+	for id, s := range m.fillSlot {
+		if t := m.byID[id]; t != nil && (t.State == queued || t.State == running) {
+			used[s] = true
+		}
+	}
+	for s := 1; ; s++ {
+		if !used[s] {
+			return s
+		}
+	}
+}
 
 func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
+		m.fillQueue = nil
 		m.input.Blur()
-		m.mode = m.prevMode
+		m.mode = modeList
+		return m, nil
+	case "tab":
+		m.askNextForm()
 		return m, nil
 	case "enter":
 		url := strings.TrimSpace(m.input.Value())
 		if !formURL.MatchString(url) {
-			m.setStatus("only Google Forms links work for now (docs.google.com/forms or forms.gle)")
+			m.setStatus("that is not an https link (tab skips this job)")
 			return m, nil
 		}
-		m.input.Blur()
-		m.mode = m.prevMode
 		j := m.inputJob
 		t := m.run.newTask("fill", "fill form · "+j.Company, j.Key)
 		m.addTask(t)
-		report := m.docPath("forms", j)
-		report = strings.TrimSuffix(report, ".md") + ".json"
-		m.run.startExec(t, m.cfg.FormPython, "tools/fill_form.py", url, "--report", report)
-		m.setStatus("filling the form in Chrome. It never submits: check it and press Submit yourself.")
-		return m, nil
+		slot := m.freeSlot()
+		m.fillSlot[t.ID] = slot
+		profile := filepath.Join(m.cfg.DataDir, "chrome", fmt.Sprintf("slot-%d", slot))
+		report := strings.TrimSuffix(m.docPath("forms", j), ".md") + ".json"
+		m.run.startExec(t, m.cfg.FormPython, "tools/fill_form.py", url, "--report", report, "--profile", profile)
+		m.setStatus("filling %s in its own Chrome window. It never submits: check it and press Submit yourself.", j.Company)
+		m.askNextForm()
+		return m, textinput.Blink
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)

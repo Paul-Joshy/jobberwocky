@@ -74,12 +74,48 @@ func TestDraftNeedsFitCheck(t *testing.T) {
 	}
 }
 
-func TestFormURLOnlyGoogleForms(t *testing.T) {
+func TestMarkAndBatchDraftSkipsUnchecked(t *testing.T) {
+	m := testModel(t, 120, 30)
+	key := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	next, _ = next.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	m = next.(Model)
+	if len(m.marked) != 2 || len(m.targets()) != 2 {
+		t.Fatalf("marked %d, targets %d", len(m.marked), len(m.targets()))
+	}
+	next, _ = m.Update(key("d"))
+	m = next.(Model)
+	if len(m.tasks) != 0 || len(m.marked) != 0 {
+		t.Fatalf("drafts started without fit checks: %d tasks", len(m.tasks))
+	}
+}
+
+func TestFillQueueAsksPerJob(t *testing.T) {
+	m := testModel(t, 120, 30)
+	m.marked = map[string]bool{"a": true, "b": true}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	m = next.(Model)
+	if m.mode != modeInput || m.fillTotal != 2 || len(m.fillQueue) != 1 {
+		t.Fatalf("mode %v total %d queue %d", m.mode, m.fillTotal, len(m.fillQueue))
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+	if m.mode != modeInput || len(m.fillQueue) != 0 {
+		t.Fatal("tab should move to the second job")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if next.(Model).mode != modeList {
+		t.Fatal("queue done should return to the list")
+	}
+}
+
+func TestFormURLNeedsHTTPS(t *testing.T) {
 	for url, want := range map[string]bool{
 		"https://forms.gle/abc":                        true,
 		"https://docs.google.com/forms/d/e/x/viewform": true,
-		"https://evil.example/forms.gle/abc":           false,
+		"https://careers.example.com/apply/123":        true,
 		"http://forms.gle/abc":                         false,
+		"javascript:alert(1)":                          false,
 	} {
 		if formURL.MatchString(url) != want {
 			t.Errorf("%s: want %v", url, want)
