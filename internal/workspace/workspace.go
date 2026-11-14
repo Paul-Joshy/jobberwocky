@@ -101,8 +101,30 @@ func (j Job) Fresh(now time.Time) string {
 	}
 }
 
-func fitOrder(f string) int {
-	switch strings.ToLower(f) {
+// Band is the job's fit band: "high", "medium", "low" or "" (not rated yet).
+// A rank score beats the quick fit. Thresholds follow the evaluation
+// framework's verdicts: 60+ is Strong or Good Fit (apply), 45-59 Moderate
+// (consider), below 45 Weak or Poor (skip).
+func (j Job) Band() string {
+	if j.RankScore != nil {
+		switch s := *j.RankScore; {
+		case s >= 60:
+			return "high"
+		case s >= 45:
+			return "medium"
+		default:
+			return "low"
+		}
+	}
+	switch f := strings.ToLower(j.Fit); f {
+	case "high", "medium", "low":
+		return f
+	}
+	return ""
+}
+
+func bandOrder(b string) int {
+	switch b {
 	case "high":
 		return 0
 	case "medium":
@@ -113,21 +135,22 @@ func fitOrder(f string) int {
 	return 3
 }
 
-// Sort puts pending hits first, then ranked jobs by score, then by quick fit, then freshest.
+// Sort orders by band (H, M, L, unrated), then ranked before unranked, then
+// score, then freshest. Pending hits go last: they are not rated yet.
 func Sort(jobs []Job, now time.Time) {
 	sort.SliceStable(jobs, func(a, b int) bool {
 		ja, jb := jobs[a], jobs[b]
 		if ja.Pending != jb.Pending {
-			return ja.Pending
+			return jb.Pending
+		}
+		if oa, ob := bandOrder(ja.Band()), bandOrder(jb.Band()); oa != ob {
+			return oa < ob
 		}
 		if (ja.RankScore != nil) != (jb.RankScore != nil) {
 			return ja.RankScore != nil
 		}
 		if ja.RankScore != nil && *ja.RankScore != *jb.RankScore {
 			return *ja.RankScore > *jb.RankScore
-		}
-		if fa, fb := fitOrder(ja.Fit), fitOrder(jb.Fit); fa != fb {
-			return fa < fb
 		}
 		da, _ := ja.AgeDays(now)
 		db, _ := jb.AgeDays(now)

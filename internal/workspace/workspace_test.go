@@ -13,13 +13,22 @@ func TestSortOrder(t *testing.T) {
 	now := time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC)
 	jobs := []Job{
 		{Key: "low-unranked", Fit: "low", FirstSeen: "2026-11-13"},
-		{Key: "ranked-60", RankScore: score(60), FirstSeen: "2026-11-01"},
+		{Key: "ranked-60", RankScore: score(60), Fit: "low", FirstSeen: "2026-11-01"}, // score beats quick fit
 		{Key: "pending", Pending: true},
 		{Key: "ranked-80", RankScore: score(80), FirstSeen: "2026-11-01"},
-		{Key: "high-unranked", Fit: "high", FirstSeen: "2026-11-01"},
+		{Key: "high-unranked-old", Fit: "high", FirstSeen: "2026-11-01"},
+		{Key: "high-unranked-new", Fit: "high", FirstSeen: "2026-11-13"},
+		{Key: "ranked-50", RankScore: score(50), FirstSeen: "2026-11-01"},
+		{Key: "ranked-30", RankScore: score(30), Fit: "high", FirstSeen: "2026-11-01"},
+		{Key: "unrated", FirstSeen: "2026-11-14"},
 	}
 	Sort(jobs, now)
-	want := []string{"pending", "ranked-80", "ranked-60", "high-unranked", "low-unranked"}
+	want := []string{
+		"ranked-80", "ranked-60", "high-unranked-new", "high-unranked-old", // H
+		"ranked-50",                 // M
+		"ranked-30", "low-unranked", // L
+		"unrated", "pending", // not rated yet
+	}
 	for i, k := range want {
 		if jobs[i].Key != k {
 			t.Fatalf("position %d: got %s, want %s", i, jobs[i].Key, k)

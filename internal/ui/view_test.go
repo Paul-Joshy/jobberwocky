@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Paul-Joshy/jobberwocky/internal/config"
+	"github.com/Paul-Joshy/jobberwocky/internal/states"
 	"github.com/Paul-Joshy/jobberwocky/internal/workspace"
 )
 
@@ -127,6 +128,41 @@ func TestDoneAndArchiveTabs(t *testing.T) {
 	}
 }
 
+func TestTopPicks(t *testing.T) {
+	cfg := &config.Config{Workspace: t.TempDir(), DataDir: t.TempDir(), MaxParallelClaude: 1}
+	m, _ := New(cfg)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
+	next, _ = next.Update(reloadMsg{jobs: []workspace.Job{
+		{Key: "low", Title: "Low", RankScore: score(30)},
+		{Key: "h1", Title: "H1", RankScore: score(82)},
+		{Key: "h2", Title: "H2", RankScore: score(70)},
+		{Key: "m1", Title: "M1", RankScore: score(50)},
+		{Key: "m2", Title: "M2", RankScore: score(48)},
+		{Key: "skipped", Title: "Skipped", RankScore: score(95), Status: "skipped"},
+	}})
+	m = next.(Model)
+	if m.top["h1"] != 1 || m.top["h2"] != 2 || m.top["m1"] != 3 || len(m.top) != 3 {
+		t.Fatalf("top = %v", m.top)
+	}
+	if m.view[0].Key != "h1" || m.view[3].Key != "m2" || m.view[4].Key != "low" {
+		t.Fatalf("order: %v %v %v", m.view[0].Key, m.view[3].Key, m.view[4].Key)
+	}
+	if !strings.Contains(m.View(), "TOP PICK #1") {
+		t.Error("detail should flag the top pick")
+	}
+	// marking the first pick done promotes the next job
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	m = next.(Model)
+	if m.top["m2"] != 3 || len(m.top) != 3 {
+		t.Fatalf("after done: top = %v", m.top)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
+	m = next.(Model)
+	if len(m.marked) != 3 || !m.marked["h2"] || !m.marked["m2"] {
+		t.Fatalf("3 should mark the picks, got %v", m.marked)
+	}
+}
+
 func TestFillQueueAsksPerJob(t *testing.T) {
 	m := testModel(t, 120, 30)
 	m.marked = map[string]bool{"a": true, "b": true}
@@ -157,5 +193,41 @@ func TestFormURLNeedsHTTPS(t *testing.T) {
 		if formURL.MatchString(url) != want {
 			t.Errorf("%s: want %v", url, want)
 		}
+	}
+}
+
+func TestTrackerAppliedJobsAreDoneAndNeverPicks(t *testing.T) {
+	cfg := &config.Config{Workspace: t.TempDir(), DataDir: t.TempDir(), MaxParallelClaude: 1}
+	m, _ := New(cfg)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
+	next, _ = next.Update(reloadMsg{
+		jobs: []workspace.Job{
+			{Key: "applied", Company: "Tailspin", Title: "Brand Strategist & Copywriter", RankScore: score(90)},
+			{Key: "drafted", Company: "Wingtip", Title: "Lead Copy", RankScore: score(80)},
+			{Key: "veto", Company: "X", Title: "Writer", RankScore: score(85), LanguageGate: "FAIL"},
+			{Key: "free", Company: "Y", Title: "Writer", RankScore: score(70)},
+		},
+		tracker: []workspace.TrackerRow{
+			{Company: "Tailspin", Role: "Brand Strategist & Copywriter", Status: "applied"},
+			{Company: "Wingtip", Role: "Lead Copy", Status: "drafted"},
+		},
+	})
+	m = next.(Model)
+	if _, ok := m.top["applied"]; ok {
+		t.Error("an applied job must not be a top pick")
+	}
+	if _, ok := m.top["veto"]; ok {
+		t.Error("a language FAIL must not be a top pick")
+	}
+	if m.top["drafted"] != 1 || m.top["free"] != 2 {
+		t.Errorf("top = %v", m.top)
+	}
+	for _, j := range m.view {
+		if j.Key == "applied" {
+			t.Error("applied job should be in the done tab, not active")
+		}
+	}
+	if m.countState(states.Done) != 1 {
+		t.Errorf("done count %d", m.countState(states.Done))
 	}
 }

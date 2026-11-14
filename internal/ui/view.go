@@ -20,6 +20,7 @@ var (
 	styleHigh   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleMed    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	styleLow    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	styleTop    = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Bold(true)
 	styleOK     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	styleBorder = lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).
@@ -88,7 +89,7 @@ func (m Model) header() string {
 		}
 	}
 	tabs := ""
-	counts := []string{"", fmt.Sprint(m.states.Count(states.Done)), fmt.Sprint(m.states.Count(states.Archived)), ""}
+	counts := []string{"", fmt.Sprint(m.countState(states.Done)), fmt.Sprint(m.countState(states.Archived)), ""}
 	for i, name := range tabNames {
 		label := name
 		if counts[i] != "" && counts[i] != "0" {
@@ -103,6 +104,9 @@ func (m Model) header() string {
 	h := styleTitle.Render("jobberwocky") + "  " + tabs + styleDim.Render(fmt.Sprintf("%d shown · %d ranked", len(m.view), ranked))
 	if len(m.pending) > 0 {
 		h += styleAccent.Render(fmt.Sprintf(" · %d new", len(m.pending)))
+	}
+	if len(m.top) > 0 {
+		h += styleTop.Render(fmt.Sprintf(" · ★ %d top picks (3 marks them)", len(m.top)))
 	}
 	if len(m.marked) > 0 {
 		h += styleAccent.Render(fmt.Sprintf(" · ● %d marked", len(m.marked)))
@@ -203,9 +207,15 @@ func (m Model) listAndDetail() string {
 		if m.marked[j.Key] {
 			sel = styleAccent.Render("●")
 		}
-		row := fmt.Sprintf("%s%s %s %s %s %s %s %s",
-			sel, score, j.Fresh(now), fitGlyph(j.Fit), fit(marks, 1),
-			fit(j.Title, titleW), fit(j.Company, compW), fit(j.Location, locW))
+		star := " "
+		title := fit(j.Title, titleW)
+		if _, ok := m.top[j.Key]; ok {
+			star = styleTop.Render("★")
+			title = styleTop.Render(title)
+		}
+		row := fmt.Sprintf("%s%s%s %s %s %s %s %s %s",
+			sel, star, score, j.Fresh(now), fitGlyph(j.Band()), fit(marks, 1),
+			title, fit(j.Company, compW), fit(j.Location, locW))
 		// rows carry colour codes, so cut them with an ANSI-aware width limit
 		if i == m.cursor {
 			row = styleSel.Width(listW).MaxWidth(listW).Render(row)
@@ -229,6 +239,9 @@ func (m Model) listAndDetail() string {
 
 func (m Model) detailText(j workspace.Job, w int) string {
 	var b strings.Builder
+	if rank, ok := m.top[j.Key]; ok {
+		b.WriteString(styleTop.Render(fmt.Sprintf("★ TOP PICK #%d · %s", rank, m.nextStep(j))) + "\n\n")
+	}
 	b.WriteString(styleTitle.Render(j.Title) + "\n")
 	b.WriteString(j.Company)
 	if j.Location != "" {
@@ -246,6 +259,9 @@ func (m Model) detailText(j workspace.Job, w int) string {
 	}
 	if j.Fit != "" {
 		fmt.Fprintf(&b, "quick fit %s · status %s\n", j.Fit, j.Status)
+	}
+	if st, ok := m.trackerSt[j.Key]; ok {
+		b.WriteString(styleOK.Render("tracker: "+st) + "\n")
 	}
 	switch m.states.Get(j.Key) {
 	case states.Done:
@@ -327,7 +343,11 @@ const helpText = `  Jobs list
     o         open the posting in your browser
     R         reload from seen_jobs.json
 
+  Order: ★ top 3 picks, then H (score 60+ or quick fit high), M (45-59),
+  L (below 45), then jobs not rated yet. Within a band: score, then freshest.
+
   Select several (f, d, r and p then act on all marked jobs at once)
+    3         mark the ★ top 3 picks
     space     mark / unmark and move down     ctrl+a  mark all shown
     esc, u    clear marks
 
@@ -345,6 +365,6 @@ const helpText = `  Jobs list
   Tasks
     t         task tray: enter for the log, x to cancel
 
-  Columns: score · freshness (🟢 ≤1 day, 🟡 ≤7, 🔴 older, ⚪ unknown) · quick fit · ✓ fit / ✎ drafted
+  Columns: ● marked · ★ top pick · score · freshness (🟢 ≤1 day, 🟡 ≤7, 🔴 older, ⚪ unknown) · quick fit · ✓ fit / ✎ drafted
 
     q         quit (asks again if tasks are running)`

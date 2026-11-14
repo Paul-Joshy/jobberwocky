@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,7 +45,10 @@ type Model struct {
 	offset  int
 	tab     listTab
 	states  *states.Store
-	marked  map[string]bool // jobs selected with space; f, d, r and p act on all of them
+	top     map[string]int // job key -> top-pick rank 1..3
+
+	trackerSt map[string]string // job key -> status in job_search_tracker.csv
+	marked    map[string]bool   // jobs selected with space; f, d, r and p act on all of them
 
 	fillQueue []workspace.Job // marked jobs still waiting for their form URL
 	fillTotal int
@@ -72,8 +76,9 @@ type Model struct {
 }
 
 type reloadMsg struct {
-	jobs []workspace.Job
-	err  error
+	jobs    []workspace.Job
+	tracker []workspace.TrackerRow
+	err     error
 }
 
 // New builds the model and loads the job list.
@@ -91,7 +96,8 @@ func New(cfg *config.Config) (Model, error) {
 		cfg: cfg, run: newRunner(cfg), filter: f, input: in, spin: sp,
 		byID: map[int]*Task{}, doc: viewport.New(80, 20),
 		marked: map[string]bool{}, fillSlot: map[int]int{}, states: states.Load(cfg.DataDir),
-		status: "s scrape · r rank · f fit check · d draft · p fill form · ? help",
+		trackerSt: map[string]string{},
+		status:    "s scrape · r rank · f fit check · d draft · p fill form · ? help",
 	}
 	return m, nil
 }
@@ -102,7 +108,11 @@ func (m Model) reload() tea.Cmd {
 	ws := m.cfg.Workspace
 	return func() tea.Msg {
 		jobs, err := workspace.LoadJobs(ws)
-		return reloadMsg{jobs: jobs, err: err}
+		if err != nil {
+			return reloadMsg{err: err}
+		}
+		tracker, _ := workspace.LoadTracker(ws) // a broken tracker only loses the applied marks
+		return reloadMsg{jobs: jobs, tracker: tracker}
 	}
 }
 
@@ -120,8 +130,31 @@ var tabNames = []string{"active", "done", "archived", "all"}
 
 // inTab: active hides done, archived and the workspace's skipped/expired
 // statuses; done and archived show only jobberwocky's own states; all shows everything.
+// state is a job's effective state: jobberwocky's own mark, else "done" when
+// the tracker already has the application (anything past drafted).
+func (m Model) state(j workspace.Job) string {
+	if s := m.states.Get(j.Key); s != "" {
+		return s
+	}
+	if st, ok := m.trackerSt[j.Key]; ok && st != "drafted" {
+		return states.Done
+	}
+	return ""
+}
+
+// countState counts stored jobs in a state (tracker-applied ones included).
+func (m Model) countState(state string) int {
+	n := 0
+	for _, j := range m.all {
+		if m.state(j) == state {
+			n++
+		}
+	}
+	return n
+}
+
 func (m Model) inTab(j workspace.Job) bool {
-	st := m.states.Get(j.Key)
+	st := m.state(j)
 	switch m.tab {
 	case tabActive:
 		return st == "" && !j.Hidden()
@@ -147,9 +180,60 @@ func (m *Model) rebuild() {
 			m.view = append(m.view, j)
 		}
 	}
-	workspace.Sort(m.view, time.Now())
+	now := time.Now()
+	workspace.Sort(m.view, now)
+	m.top = m.topPicks(now)
+	// top picks lead every list they appear in, in pick order
+	sort.SliceStable(m.view, func(a, b int) bool {
+		ra, oka := m.top[m.view[a].Key]
+		rb, okb := m.top[m.view[b].Key]
+		if oka != okb {
+			return oka
+		}
+		return oka && ra < rb
+	})
 	if m.cursor >= len(m.view) {
 		m.cursor = max(0, len(m.view)-1)
+	}
+}
+
+// topPicks are today's three best active jobs (H band first, then M), ignoring
+// the filter so the picks stay put while you search. Done, archived, skipped
+// and unrated jobs are never picks.
+func (m Model) topPicks(now time.Time) map[string]int {
+	var cands []workspace.Job
+	for _, j := range m.all {
+		if j.Pending || j.Hidden() || m.state(j) != "" {
+			continue
+		}
+		if j.LanguageGate == "FAIL" || j.LocationVerdict == "FAIL" {
+			continue // a hard veto is never a pick
+		}
+		if b := j.Band(); b == "high" || b == "medium" {
+			cands = append(cands, j)
+		}
+	}
+	workspace.Sort(cands, now)
+	top := map[string]int{}
+	for i := 0; i < len(cands) && i < 3; i++ {
+		top[cands[i].Key] = i + 1
+	}
+	return top
+}
+
+// nextStep is what a job needs next on its way to submitted.
+func (m Model) nextStep(j workspace.Job) string {
+	switch {
+	case m.busy("draft", j.Key):
+		return "drafting…"
+	case m.busy("fit", j.Key):
+		return "fit check running…"
+	case m.hasDoc("drafts", j):
+		return "ready to submit (p fill · c done)"
+	case m.hasDoc("fit", j):
+		return "ready to draft (d)"
+	default:
+		return "ready for a fit check (f)"
 	}
 }
 
@@ -243,6 +327,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.all = msg.jobs
+		m.trackerSt = map[string]string{}
+		for _, j := range m.all {
+			if st, ok := workspace.TrackerStatus(j, msg.tracker); ok {
+				m.trackerSt[j.Key] = st
+			}
+		}
 		m.rebuild()
 		return m, nil
 
@@ -504,6 +594,12 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = min(len(m.view)-1, m.cursor+1)
 			m.setStatus("%d marked · f fit · d draft · r rank · p fill · esc clear", len(m.marked))
 		}
+	case "3":
+		m.clearMarks()
+		for k := range m.top {
+			m.marked[k] = true
+		}
+		m.setStatus("★ top %d marked · f fit · d draft · p fill", len(m.top))
 	case "ctrl+a":
 		for _, j := range m.view {
 			if !j.Pending {
