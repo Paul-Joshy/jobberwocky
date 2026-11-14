@@ -696,19 +696,19 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) openJobDoc(j workspace.Job) {
-	var b strings.Builder
+	var parts []string
 	for _, kind := range []string{"drafts", "fit"} {
 		if raw, err := os.ReadFile(m.docPath(kind, j)); err == nil {
-			title := map[string]string{"drafts": "DRAFT RESULT", "fit": "FIT CHECK"}[kind]
-			fmt.Fprintf(&b, "── %s ──\n\n%s\n\n", title, strings.TrimSpace(string(raw)))
+			title := map[string]string{"drafts": "Draft result", "fit": "Fit check"}[kind]
+			parts = append(parts, "# "+title+"\n\n"+strings.TrimSpace(string(raw)))
 		}
 	}
-	if b.Len() == 0 {
-		b.WriteString(m.detailText(j, max(40, m.w-4)))
-		b.WriteString("\n\nNo fit check yet. Press esc, then f.")
-	}
 	m.docTitle = j.Company + " · " + j.Title
-	m.doc.SetContent(wrap(b.String(), m.doc.Width))
+	if len(parts) == 0 {
+		m.doc.SetContent(wrap(m.detailText(j, max(40, m.w-4))+"\n\nNo fit check yet. Press esc, then f.", m.doc.Width))
+	} else {
+		m.doc.SetContent(renderMarkdown(strings.Join(parts, "\n\n---\n\n"), m.doc.Width))
+	}
 	m.doc.GotoTop()
 	m.prevMode, m.mode = modeList, modeDoc
 }
@@ -839,14 +839,15 @@ func (m Model) updateTasks(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for _, l := range t.Lines {
 				b.WriteString(l + "\n")
 			}
-			if t.Result != "" {
-				b.WriteString("\n── RESULT ──\n\n" + t.Result + "\n")
-			}
 			if t.Err != nil {
-				b.WriteString("\n── ERROR ──\n\n" + t.Err.Error() + "\n")
+				b.WriteString("\n" + styleErr.Render("ERROR: "+t.Err.Error()) + "\n")
+			}
+			content := wrap(b.String(), m.doc.Width)
+			if t.Result != "" {
+				content += "\n" + renderMarkdown("# Result\n\n"+t.Result, m.doc.Width)
 			}
 			m.docTitle = t.Label
-			m.doc.SetContent(wrap(b.String(), m.doc.Width))
+			m.doc.SetContent(content)
 			m.doc.GotoBottom()
 			m.prevMode, m.mode = modeTasks, modeDoc
 		}
